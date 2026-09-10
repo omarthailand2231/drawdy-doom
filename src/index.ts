@@ -20,6 +20,7 @@ import { loadDoomModule } from "./doom/load";
 import { KvSaveStore } from "./doom/saves";
 import { InputRouter } from "./input";
 import { call, initProtocol, subscribe, unsubscribe } from "./protocol";
+import { TEST_IMAGE_PNG, layoutProbes } from "./render/diagnostics";
 import { ImageScreen, imageDisplaySupported } from "./render/image-screen";
 import { CanvasScreen, RESOLUTIONS, type Rect, type ResolutionId, type ScreenStyle } from "./render/screen";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type DisplayMode, type DoomSettings } from "./settings";
@@ -81,6 +82,9 @@ class DoomDriver {
     private lastBatch = 0;
     /** Loop diagnostics — surfaced in the console so a slow board can be explained. */
     private readonly diag = { loops: 0, ingests: 0, unchanged: 0, inFlight: 0, flushes: 0, stale: 0 };
+
+    private probePreviewId: string | null = null;
+    private probeCommittedIds: string[] = [];
 
     private consoleOpen = false;
     private stateTimer: ReturnType<typeof setInterval> | null = null;
@@ -162,6 +166,14 @@ class DoomDriver {
                     ],
                 },
                 { id: "doom.mouse", title: "Toggle pointer steering", onClick: () => void this.setMouseLook(!this.settings.mouseLook) },
+                {
+                    id: "doom.diagnose",
+                    title: "Diagnose display",
+                    children: [
+                        { id: "doom.diagnose.run", title: "Place display probes", onClick: () => void this.runDisplayProbes() },
+                        { id: "doom.diagnose.clear", title: "Clear probes", onClick: () => void this.clearDisplayProbes() },
+                    ],
+                },
                 { id: "doom.fullscreen", title: "Toggle fullscreen", onClick: () => void this.toggleFullscreen() },
             ],
         };
@@ -620,6 +632,92 @@ class DoomDriver {
         await call("command:dom:exit-fullscreen");
     }
 
+    // ------------------------------------------------------------- diagnostics
+
+    /**
+     * Lay every candidate full-resolution variant on the board at once.
+     *
+     * A blank screen only says "the component did not draw" — it does not say
+     * whether components render at all, whether image nodes render, or whether
+     * it is the URL form or the sizing that is wrong. Ten labelled tiles
+     * answer all of that in one look.
+     */
+    private async runDisplayProbes(): Promise<void> {
+        await this.clearDisplayProbes();
+        await this.stop();
+
+        const view = await this.viewportRect();
+        if (!view) {
+            this.log("cannot read the viewport — probes need a visible board");
+            return;
+        }
+        const inset = 0.04;
+        const area: Rect = {
+            x: view.x + view.width * inset,
+            y: view.y + view.height * inset,
+            width: view.width * (1 - 2 * inset),
+            height: view.height * (1 - 2 * inset),
+        };
+
+        const { previews, committed, labels } = layoutProbes(
+            area,
+            await this.probeSource(),
+            this.mintId,
+            this.styling?.foreground ?? "#ffffff"
+        );
+
+        const created = await call("command:scene:create-drawdy-preview-elements", {
+            elements: [...previews, ...labels],
+        });
+        if (created.error) {
+            this.log(`probes failed: ${created.error.message ?? created.error.type}`);
+            return;
+        }
+        this.probePreviewId = created.value.previewId;
+
+        if (committed.length > 0) {
+            const added = await call("command:scene:add-drawdy-elements", { elements: committed });
+            if (added.error) this.log(`committed probe failed: ${added.error.message ?? added.error.type}`);
+            else this.probeCommittedIds = committed.map((element) => element.drawdyElementId);
+        }
+
+        await call("command:camera:fly-to-rect", { rect: area, flyDurationMs: 400, zoom: 4 });
+        this.log("probes placed — whichever tile shows a picture is the one to build on");
+        this.setStatus("display probes on the board");
+    }
+
+    private async clearDisplayProbes(): Promise<void> {
+        if (this.probePreviewId) {
+            await call("command:scene:delete-drawdy-preview-elements", { previewIds: [this.probePreviewId] });
+            this.probePreviewId = null;
+        }
+        if (this.probeCommittedIds.length > 0) {
+            await call("command:scene:remove-drawdy-elements", { drawdyElementIds: this.probeCommittedIds });
+            this.probeCommittedIds = [];
+        }
+    }
+
+    /** A payload for the "real frame" probe: an actual encoded frame if we have one. */
+    private async probeSource(): Promise<string> {
+        if (this.imageScreen) return this.imageScreen.placeholderSource;
+        const engine = this.engine;
+        if (engine && imageDisplaySupported()) {
+            const pixels = engine.latestFrame();
+            if (pixels) {
+                const scratch = new ImageScreen({ x: 0, y: 0, width: 1, height: 1 }, "probe", {
+                    format: this.settings.imageFormat,
+                    quality: this.settings.imageQuality,
+                });
+                try {
+                    return await scratch.encode(pixels, engine.width, engine.height);
+                } catch {
+                    /* fall through to the static test image */
+                }
+            }
+        }
+        return TEST_IMAGE_PNG;
+    }
+
     // ----------------------------------------------------------------- console
 
     private async toggleConsole(): Promise<void> {
@@ -804,6 +902,8 @@ class DoomDriver {
                 else if (message.id === "fit") await this.fitToView();
                 else if (message.id === "fullscreen") await this.toggleFullscreen();
                 else if (message.id === "restart") await this.restart();
+                else if (message.id === "probe") await this.runDisplayProbes();
+                else if (message.id === "probe-clear") await this.clearDisplayProbes();
                 return;
 
             case "set":

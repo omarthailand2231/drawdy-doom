@@ -50,8 +50,12 @@ export interface SaveStore {
 }
 
 export interface DoomEngineHooks {
-    /** A finished frame, BGRA, `width * height * 4` bytes, borrowed — copy if you keep it. */
-    onFrame(pixels: Uint8Array, width: number, height: number): void;
+    /**
+     * A finished frame, BGRA, `width * height * 4` bytes, borrowed — copy if
+     * you keep it. Optional: a host that only wants the newest frame can skip
+     * this and read {@link DoomEngine.latestFrame} after `advance` instead.
+     */
+    onFrame?(pixels: Uint8Array, width: number, height: number): void;
     onLog?(level: "info" | "error", message: string): void;
     saves?: SaveStore;
 }
@@ -95,7 +99,7 @@ export class DoomEngine {
     height = 0;
     /** Tics simulated since `start`. */
     tics = 0;
-    /** Frames DOOM has drawn since `start`. */
+    /** Frames DOOM has drawn since `start`. Doubles as a "is this frame new?" token. */
     frames = 0;
     /** Set when a tic wedged or trapped; the engine is done. */
     crashed: string | null = null;
@@ -105,6 +109,8 @@ export class DoomEngine {
     private readonly wads: Uint8Array[];
     private readonly held = new Set<number>();
 
+    /** Where the newest frame lives inside wasm memory; -1 before the first one. */
+    private framePointer = -1;
     private clockMs = 0;
     private clockTargetMs = 0;
     private clockQueries = 0;
@@ -177,6 +183,8 @@ export class DoomEngine {
                 drawFrame: (pointer: number) => {
                     const self = engine as DoomEngine;
                     self.frames++;
+                    self["framePointer"] = pointer;
+                    if (!self.hooks.onFrame) return;
                     const size = self.width * self.height * 4;
                     self.hooks.onFrame(u8().subarray(pointer, pointer + size), self.width, self.height);
                 },
@@ -277,6 +285,19 @@ export class DoomEngine {
     resetPacing(): void {
         this.lastRealMs = null;
         this.debtMs = 0;
+    }
+
+    /**
+     * A view of the most recent frame, straight out of wasm memory.
+     *
+     * Zero-copy, and therefore only valid until the next call into the module:
+     * read it between `advance` and the next `advance`. Rebuilt each time
+     * because a growing memory detaches older views.
+     */
+    latestFrame(): Uint8Array | null {
+        if (this.framePointer < 0) return null;
+        const size = this.width * this.height * 4;
+        return new Uint8Array(this.exports.memory.buffer, this.framePointer, size);
     }
 
     keyDown(key: number): void {
