@@ -4,7 +4,7 @@ The real DOOM (1993), playable on a [Drawdy](https://drawdy.io) board. Not a
 screenshot, not an embed — the game runs inside the extension and every frame
 is pushed onto the canvas as live scene elements. **The board is the display.**
 
-![DOOM running at native resolution on a Drawdy board](docs/full-resolution.png)
+![DOOM drawn as a grid of canvas rectangles on a Drawdy board](docs/shape-grid.png)
 
 The whole thing is one 2 MB `.drawdyx`: engine, shareware WAD and driver. No
 network, no data files, no install steps beyond dropping it into Drawdy.
@@ -60,29 +60,45 @@ back into the catch-up logic.
 Drawdy has no per-frame pixel surface, so DOOM's frame buffer has to become
 scene elements. Both ways of doing that are implemented.
 
-**Full resolution** (default). Preview elements may not be images —
-`DrawdyPreviewElementSchema` excludes that type — but they *may* be
-`component` elements, and a component carries a whole `DomElementSchema`,
-whose `image` node takes an image URL. So one preview component holding one
-encoded frame is DOOM at its native 640×400, and a frame is a **single**
-element update. Encoding happens on an `OffscreenCanvas` in the worker: BGRA is
-swizzled to RGBA in one pass over a `Uint32Array`, then `convertToBlob` and a
-data URL. Data URLs rather than object URLs on purpose — one revoked
-mid-decode flickers; a data URL cannot go stale.
+**Shape grid** (the default, and what actually works today). One canvas
+rectangle per "pixel", up to 213×133 of them. Element objects are allocated
+once and mutated in place, so a frame costs no garbage, and only cells whose
+*quantised* colour changed are sent — dithering noise does not count as
+movement. Standing still in a corridor sends nothing at all.
 
-**Shape grid** (fallback, and a good look in its own right). One canvas
-rectangle per "pixel", up to 213×133 of them.
+**Full resolution** — implemented, and rejected by the host. Preview elements
+may not be images — `DrawdyPreviewElementSchema` excludes that type — but they
+*may* be `component` elements, and a component carries a whole
+`DomElementSchema` whose `image` node takes an image URL. One preview component
+holding one encoded frame would be DOOM at its native 640×400, with a frame
+costing a *single* element update.
 
-![The same game drawn as a grid of canvas rectangles](docs/shape-grid.png)
+Drawdy accepts that component at create time and hands back a `previewId` —
+and then never adds it to the live set, so every subsequent update matches
+zero elements and the board shows only the black backdrop behind it. The code
+is still here because it is a one-line switch if a future build draws them, but
+it is no longer the default and it no longer waits to be discovered: the mount
+echoes one update back at the component and treats `updated: 0` as proof, so
+the driver falls back to the grid before the player sees anything wrong.
 
-Element objects are allocated once and mutated in place, so a frame costs no
-garbage, and only cells whose *quantised* colour changed are sent — dithering
-noise does not count as movement. Standing still in a corridor sends nothing at
-all; measured on E1M1 at 128×80, an average frame touches 2,689 of 10,240
-cells and resampling costs 0.41 ms.
+### Colour is a performance setting
 
-Either way the frames are **preview** elements: they render without
-committing, so playing DOOM never touches undo, never syncs to collaborators
+The grid sends a cell when its *quantised* colour changes, so collapsing three
+channels onto one luminance ramp cuts the traffic as well as the palette.
+Measured over 600 identical gameplay frames at 128×80 (`node
+test/palette-bench.mjs`):
+
+| palette | cells changed per frame | of the grid | vs colour |
+| --- | --- | --- | --- |
+| Colour | 5,242 | 51% | 100% |
+| Monochrome, 16 shades | 2,801 | 27% | 53% |
+| Monochrome, 12 shades | 2,242 | 22% | 43% |
+| Monochrome, 8 shades | 1,565 | 15% | **30%** |
+
+Amber CRT and green phosphor are the same ramp with a tint, and cost exactly
+the same. A third of the traffic, and it still reads perfectly as DOOM.
+
+The frames are **preview** elements: they render without committing, so playing DOOM never touches undo, never syncs to collaborators
 and never ends up in the saved document. Switch modes from the console or
 right-click → **DOOM** → **Display**.
 
