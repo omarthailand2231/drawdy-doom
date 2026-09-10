@@ -1,0 +1,21 @@
+drawdy-doom
+===========
+
+This extension bundles a compiled copy of DOOM.
+
+  Engine   doom.wasm — https://github.com/jacobenget/doom.wasm  (v0.1.0)
+           id Software's DOOM sources by way of doomgeneric, compiled to a
+           single freestanding WebAssembly module. Fetched at build time and
+           pinned by SHA-256 (see scripts/fetch-doom-wasm.mjs).
+
+  Game     The DOOM shareware WAD is embedded inside that wasm module. It is
+           Episode 1, "Knee-Deep in the Dead", which id Software released as
+           freely redistributable shareware. Episodes 2 and 3 are not included.
+           Point the console's WAD picker at a DOOM.WAD, DOOM2.WAD or
+           freedoom.wad you own to play those instead.
+
+  Licence  The DOOM source release is GPL-2.0-or-later, so this extension is
+           distributed under the same terms. See LICENSE.
+
+  DOOM and id Software are trademarks of id Software LLC / ZeniMax Media.
+  This project is not affiliated with or endorsed by either.
