@@ -57,7 +57,7 @@ test("rows are stacked down the rect, not newline-separated", () => {
 });
 
 test("brightness picks the character", () => {
-    const screen = make({ ramp: "classic", gamma: 1 });
+    const screen = make({ ramp: "classic", gamma: 1, fillDark: false });
     screen.ingest(solid(80, 40, 0), 80, 40);
     const dark = screen.elements[0].text[0];
     screen.ingest(solid(80, 40, 255), 80, 40);
@@ -65,6 +65,43 @@ test("brightness picks the character", () => {
     const ramp = ASCII_RAMPS.find((r) => r.id === "classic").chars;
     assert.equal(dark, ramp[0]);
     assert.equal(bright, ramp[ramp.length - 1]);
+});
+
+test("fillDark leaves no holes in the picture", () => {
+    // A blank darkest step shows the board through the image; the faintest
+    // glyph gives black some substance instead.
+    const blanks = make({ ramp: "classic", fillDark: false });
+    const filled = make({ ramp: "classic", fillDark: true });
+    const black = solid(80, 40, 0);
+    blanks.ingest(black, 80, 40);
+    filled.ingest(black, 80, 40);
+    assert.match(blanks.elements[0].text, /^ +$/);
+    assert.doesNotMatch(filled.elements[0].text, / /);
+    assert.equal(filled.elements[0].text.length, 20, "still a full row");
+});
+
+test("rows carry an explicit box, because an implicit one wraps", () => {
+    const screen = make({ cols: 40, rows: 8 });
+    for (const line of screen.elements) {
+        assert.equal(line.textAlign, "left");
+        assert.ok(line.width > 0, "a stated width");
+        assert.ok(line.height > 0, "a stated height");
+        // Wider than the text needs, so a slightly-off advance cannot wrap it.
+        assert.ok(line.width > 40 * line.fontSize * 0.4);
+    }
+});
+
+test("a measured row corrects the font size", () => {
+    const screen = make({ cols: 40, rows: 8 });
+    const before = screen.fontSize;
+    // Pretend the board rendered the row at half the width we intended.
+    assert.ok(screen.fitToMeasuredWidth(screen.targetWidth / 2));
+    assert.ok(Math.abs(screen.fontSize - before * 2) < 0.01);
+    // And that a good fit is left alone.
+    assert.ok(!screen.fitToMeasuredWidth(screen.targetWidth));
+    // Nonsense measurements are ignored rather than acted on.
+    assert.ok(!screen.fitToMeasuredWidth(0));
+    assert.ok(!screen.fitToMeasuredWidth(screen.targetWidth * 100));
 });
 
 test("a gradient uses the whole ramp", () => {

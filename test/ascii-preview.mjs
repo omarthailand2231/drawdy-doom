@@ -14,6 +14,7 @@ const rows = Number(process.argv[3] ?? 34);
 const ramp = process.argv[4] ?? "blocks";
 const tics = Number(process.argv[5] ?? 430);
 const gamma = Number(process.argv[6] ?? 0.62);
+const contrast = Number(process.argv[7] ?? 1.35);
 
 const { engine, frame } = await bootDoom();
 let minted = 0;
@@ -22,6 +23,7 @@ const screen = new AsciiScreen({ x: 0, y: 0, width: 1280, height: 800 }, () => `
     rows,
     ramp,
     gamma,
+    contrast,
 });
 
 const run = (n) => { for (let i = 0; i < n; i++) engine.tick(); };
