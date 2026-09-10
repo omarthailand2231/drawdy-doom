@@ -27,6 +27,12 @@ export interface DoomSettings {
     asciiRamp: string;
     asciiGamma: number;
     asciiContrast: number;
+    /**
+     * Glyph width as a fraction of font size, set by hand. 0 means "use the
+     * measured value" — the override exists because some boards will not
+     * measure rendered text at all.
+     */
+    asciiAdvance: number;
     /** Draw the darkest level as a faint glyph rather than leaving it blank. */
     asciiFillDark: boolean;
     palette: PaletteMode;
@@ -56,6 +62,7 @@ export const DEFAULT_SETTINGS: DoomSettings = {
     asciiRamp: "auto",
     asciiGamma: 0.62,
     asciiContrast: 1.35,
+    asciiAdvance: 0,
     asciiFillDark: false,
     palette: "color",
     shades: 16,

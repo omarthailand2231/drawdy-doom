@@ -108,8 +108,6 @@ class DoomDriver {
     /** Set once per mount: has this board been shown to actually draw components? */
     private displayVerified = false;
     private verifying = false;
-    /** ASCII only: has a real row been measured and the font size corrected? */
-    private fitCalibrated = false;
     /** Consecutive updates that matched nothing — see handleDrawOutcome. */
     private missedBatches = 0;
 
@@ -365,16 +363,18 @@ class DoomDriver {
             this.asciiScreen = new AsciiScreen(rect, this.mintId, {
                 cols,
                 rows: 40, // replaced below, once the advance is known
-                ramp: resolveRamp(this.settings.asciiRamp, metrics?.monospaced ?? null),
+                ramp: resolveRamp(this.settings.asciiRamp, metrics ? metrics.monospaced : null),
                 customChars: this.settings.asciiRamp === AUTO_RAMP ? (this.uniformRamp?.chars ?? null) : null,
                 gamma: this.settings.asciiGamma,
                 contrast: this.settings.asciiContrast,
                 fillDark: this.settings.asciiFillDark,
                 color: this.asciiColour(),
                 measuredAdvance:
-                    (this.settings.asciiRamp === AUTO_RAMP ? this.uniformRamp?.advance : null) ??
-                    metrics?.advance ??
-                    null,
+                    this.settings.asciiAdvance > 0
+                        ? this.settings.asciiAdvance
+                        : ((this.settings.asciiRamp === AUTO_RAMP ? this.uniformRamp?.advance : null) ??
+                          metrics?.advance ??
+                          null),
             });
             // Rows follow from the glyph advance, so the picture stays upright.
             this.asciiScreen.setOptions({
@@ -424,7 +424,6 @@ class DoomDriver {
         }
         this.previewId = created.value.previewId;
         this.displayVerified = false;
-        this.fitCalibrated = false;
 
         // Some Drawdy builds accept a `component` preview at create time and
         // then quietly drop it, so updates match nothing. Echo one update back
@@ -480,7 +479,14 @@ class DoomDriver {
         if (this.rampProbed || this.settings.asciiRamp !== AUTO_RAMP) return;
         this.rampProbed = true;
         const discovered = await discoverUniformRamp(this.mintId);
-        if (!discovered) return;
+        if (!discovered) {
+            this.log(
+                "this board will not measure rendered text, so glyph widths cannot be checked — " +
+                    "falling back to digits, which are tabular in almost every font and so stay " +
+                    "the same width. Pick another ramp by hand if you prefer the look."
+            );
+            return;
+        }
         this.uniformRamp = discovered;
         this.log(
             `ramp measured: ${discovered.kept} of ${discovered.considered} glyphs share a width — ` +
@@ -663,10 +669,6 @@ class DoomDriver {
             if (!this.handleDrawOutcome(outcome, elements.length)) return;
             this.framesShown++;
             this.updateMs = this.updateMs === 0 ? elapsed : this.updateMs * 0.85 + elapsed * 0.15;
-            if (this.asciiScreen && !this.fitCalibrated && this.framesShown > 2) {
-                this.fitCalibrated = true;
-                void this.calibrateAsciiFit();
-            }
             if (this.imageScreen && !this.displayVerified && !this.verifying && this.framesShown > 8) {
                 void this.verifyImageDisplay(frameLuminance(pixels, engine.width, engine.height));
             }
@@ -707,29 +709,6 @@ class DoomDriver {
 
     private async remount(rect: Rect): Promise<void> {
         if (await this.mountScreen(rect)) this.screen?.invalidate();
-    }
-
-    /**
-     * Size the ASCII font from a row the board actually rendered.
-     *
-     * The glyph advance we start from is an estimate, and an estimate that is
-     * even slightly low makes rows overflow their element and wrap, which
-     * destroys the picture. Measuring a live row closes the loop.
-     */
-    private async calibrateAsciiFit(): Promise<void> {
-        const screen = this.asciiScreen;
-        if (!screen) return;
-        const id = screen.elements[Math.floor(screen.lineCount / 2)]?.drawdyElementId;
-        if (!id) return;
-        const rects = await call("command:scene:element-rects", { drawdyElementIds: [id] });
-        if (rects.error) return;
-        const measured = rects.value.rects[0]?.rect.width ?? 0;
-        if (!screen.fitToMeasuredWidth(measured)) return;
-        this.log(
-            `row measured ${measured.toFixed(0)} against ${screen.targetWidth.toFixed(0)} wide — ` +
-                `font resized to ${screen.fontSize.toFixed(1)}`
-        );
-        screen.invalidate();
     }
 
     /**
@@ -1038,6 +1017,8 @@ class DoomDriver {
                 asciiCols: this.settings.asciiCols,
                 asciiGamma: this.settings.asciiGamma,
                 asciiContrast: this.settings.asciiContrast,
+                asciiAdvance: this.settings.asciiAdvance,
+                measurable: this.uniformRamp !== null,
                 fillDark: this.settings.asciiFillDark,
                 ramp: this.uniformRamp?.chars ?? null,
                 font: this.fontMetrics
@@ -1223,6 +1204,10 @@ class DoomDriver {
                         this.asciiScreen.setOptions({ gamma: this.settings.asciiGamma });
                         this.asciiScreen.invalidate();
                     }
+                } else if (message.key === "asciiAdvance" && typeof message.value === "number") {
+                    this.settings.asciiAdvance = Math.max(0, Math.min(1.5, message.value));
+                    saveSettings(this.settings);
+                    if (this.running && this.asciiScreen) await this.mountScreen(this.asciiScreen.rect);
                 } else if (message.key === "asciiContrast" && typeof message.value === "number") {
                     this.settings.asciiContrast = Math.max(0.5, Math.min(3, message.value));
                     saveSettings(this.settings);

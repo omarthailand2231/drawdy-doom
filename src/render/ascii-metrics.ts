@@ -27,15 +27,57 @@ export interface FontMetrics {
 }
 
 const SAMPLE_LENGTH = 24;
+/** A second, longer sample: width must scale with it or measuring is a lie. */
+const CONTROL_LENGTH = 48;
 const PROBE_FONT_SIZE = 100;
 /** Widths within this fraction of each other count as equal. */
 const SAME_WIDTH = 0.02;
+
+/**
+ * Does `element-rects` actually reflect what a text element *renders*?
+ *
+ * A host is free to answer with the element's stated or default box rather
+ * than the extent of its glyphs, and there is no way to tell from a single
+ * measurement — a plausible number comes back either way. So measure the same
+ * character at two lengths: real text measurement doubles when the string
+ * doubles, a box does not. Everything downstream depends on this, because
+ * measurements that ignore content make every glyph look identical, which is
+ * exactly the answer that makes a non-uniform ramp look uniform.
+ *
+ * Note the probes deliberately state no `width`: stating one is what invites
+ * the host to hand it straight back.
+ */
+async function measurementIsTrustworthy(mintId: () => string): Promise<boolean> {
+    const shortId = mintId();
+    const longId = mintId();
+    const created = await call("command:scene:create-drawdy-preview-elements", {
+        elements: [
+            { type: "text", drawdyElementId: shortId, x: -1e6, y: -1e6, text: "#".repeat(SAMPLE_LENGTH), fontSize: PROBE_FONT_SIZE, color: "#000000", textAlign: "left" },
+            { type: "text", drawdyElementId: longId, x: -1e6, y: -1e6 - 400, text: "#".repeat(CONTROL_LENGTH), fontSize: PROBE_FONT_SIZE, color: "#000000", textAlign: "left" },
+        ],
+    });
+    if (created.error) return false;
+    try {
+        const rects = await call("command:scene:element-rects", { drawdyElementIds: [shortId, longId] });
+        if (rects.error) return false;
+        const widthOf = (id: string): number =>
+            rects.value.rects.find((entry) => entry.drawdyElementId === id)?.rect.width ?? 0;
+        const short = widthOf(shortId);
+        const long = widthOf(longId);
+        if (!(short > 0) || !(long > 0)) return false;
+        const ratio = long / short;
+        return ratio > 1.6 && ratio < 2.4;
+    } finally {
+        await call("command:scene:delete-drawdy-preview-elements", { previewIds: [created.value.previewId] });
+    }
+}
 
 /**
  * @param mintId host id minter
  * @param sample characters to measure with — pass the ramp actually in use
  */
 export async function measureFont(mintId: () => string, sample: string): Promise<FontMetrics | null> {
+    if (!(await measurementIsTrustworthy(mintId))) return null;
     const uniform = (sample[sample.length - 1] ?? "#").repeat(SAMPLE_LENGTH);
     // A mixed string of the same length: same width means uniform advance.
     let mixed = "";
@@ -131,6 +173,7 @@ export interface DiscoveredRamp {
  * the host turns out to use.
  */
 export async function discoverUniformRamp(mintId: () => string): Promise<DiscoveredRamp | null> {
+    if (!(await measurementIsTrustworthy(mintId))) return null;
     const ids = CANDIDATES.map(() => mintId());
     const elements = CANDIDATES.map((character, index) => ({
         type: "text" as const,
@@ -172,6 +215,11 @@ export async function discoverUniformRamp(mintId: () => string): Promise<Discove
             if (!best || group.length > best.chars.length) best = { width, chars: group };
         }
         if (!best || best.chars.length < MIN_RAMP) return null;
+        // If *every* candidate agreed, the font is either genuinely monospaced
+        // or the host is not measuring glyphs at all. The trustworthiness probe
+        // above rules out the latter, but a ramp of everything is still a bad
+        // ramp — narrow it to a legible subset rather than shipping 57 glyphs.
+
 
         // Thin an over-long group down evenly, keeping the extremes.
         let chars = best.chars;

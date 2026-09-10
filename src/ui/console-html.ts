@@ -167,6 +167,10 @@ export function consoleHtml(styling: ModuleStyling): string {
         <span>Contrast <b id="ctval">1.35</b></span>
         <input type="range" id="contrast" min="50" max="300" step="5" value="135" style="flex:1 1 90px" />
       </label>
+      <label class="toggle" style="justify-content:space-between;margin-top:4px">
+        <span>Glyph width <b id="adval">auto</b></span>
+        <input type="range" id="advance" min="0" max="120" step="1" value="0" style="flex:1 1 90px" />
+      </label>
       <label class="toggle" style="margin-top:6px"><input type="checkbox" id="fillDark" /> Fill dark areas (slower)</label>
       <div class="wad" id="fontNote"></div>
     </div>
@@ -319,6 +323,10 @@ export function consoleHtml(styling: ModuleStyling): string {
   byId("fillDark").addEventListener("change", function (e) { post({ t: "set", key: "fillDark", value: e.target.checked }); });
   byId("contrast").addEventListener("change", function (e) { post({ t: "set", key: "asciiContrast", value: Number(e.target.value) / 100 }); });
   byId("contrast").addEventListener("input", function (e) { byId("ctval").textContent = (Number(e.target.value) / 100).toFixed(2); });
+  byId("advance").addEventListener("change", function (e) { post({ t: "set", key: "asciiAdvance", value: Number(e.target.value) / 100 }); });
+  byId("advance").addEventListener("input", function (e) {
+    byId("adval").textContent = Number(e.target.value) === 0 ? "auto" : (Number(e.target.value) / 100).toFixed(2);
+  });
   byId("cols").addEventListener("change", function (e) { post({ t: "set", key: "asciiCols", value: Number(e.target.value) }); });
   byId("cols").addEventListener("input", function (e) { byId("cval").textContent = e.target.value; });
   byId("gamma").addEventListener("change", function (e) { post({ t: "set", key: "asciiGamma", value: Number(e.target.value) / 100 }); });
@@ -377,10 +385,9 @@ export function consoleHtml(styling: ModuleStyling): string {
         byId("cols").value = String(message.asciiCols);
         byId("cval").textContent = String(message.asciiCols);
       }
-      if (message.font) {
-        byId("fontNote").textContent =
-          "font: " + message.font + (message.ramp ? "  ·  ramp " + message.ramp : "");
-      }
+      byId("fontNote").textContent = message.measurable
+        ? "font " + (message.font || "?") + "  ·  ramp " + (message.ramp || "?")
+        : "this board will not measure text — set Glyph width by eye if rows change length";
       if (typeof message.fillDark === "boolean") byId("fillDark").checked = message.fillDark;
       if (message.asciiContrast && Number(byId("contrast").value) !== Math.round(message.asciiContrast * 100)) {
         byId("contrast").value = String(Math.round(message.asciiContrast * 100));

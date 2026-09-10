@@ -34,7 +34,10 @@ export const ASCII_RAMPS: readonly AsciiRamp[] = [
     { id: "blocks-solid", label: "Solid blocks  ▁▄█", chars: " ▁▂▃▄▅▆▇█", advance: 0.6 },
     { id: "classic", label: "Classic  .:-=+*#%@", chars: " .:-=+*#%@", advance: 0.55 },
     { id: "dense", label: "Dense 16-step", chars: " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$", advance: 0.55 },
-    { id: "digits", label: "Digits (tabular)", chars: " 1234567890", advance: 0.6 },
+    // Digits are the one set that is uniform by design rather than by luck:
+    // almost every UI font ships tabular figures so numbers line up in
+    // columns. Ordered here by how much ink each one puts down.
+    { id: "digits", label: "Digits — same width in almost any font", chars: " 1742356908", advance: 0.6 },
 ] as const;
 
 export const AUTO_RAMP = "auto";
@@ -49,7 +52,12 @@ export const AUTO_RAMP = "auto";
  */
 export function resolveRamp(requested: string, monospaced: boolean | null): string {
     if (requested !== AUTO_RAMP) return requested;
-    return monospaced ? "classic" : "blocks";
+    if (monospaced === true) return "classic";
+    // `null` means the board would not measure, so nothing about the font is
+    // known. Digits are the safest thing to draw blind: tabular figures are
+    // near-universal, whereas block elements are only uniform if the font
+    // happens to supply all four from the same fallback.
+    return monospaced === false ? "blocks" : "digits";
 }
 
 export interface AsciiOptions {

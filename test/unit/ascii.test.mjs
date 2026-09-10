@@ -181,3 +181,13 @@ test("every glyph in a measured ramp is used across a gradient", () => {
     const used = new Set(screen.elements[0].text.split(""));
     assert.equal(used.size, 5);
 });
+
+test("with no measurement at all, the ramp falls back to digits", async () => {
+    const { resolveRamp } = await import("../../src/render/ascii-screen.ts");
+    // Tabular figures are uniform by design; blocks only if the font supplies
+    // all of them from one fallback, and monospace only if it is monospace.
+    assert.equal(resolveRamp("auto", null), "digits");
+    assert.equal(resolveRamp("auto", true), "classic");
+    assert.equal(resolveRamp("auto", false), "blocks");
+    assert.equal(resolveRamp("classic", null), "classic", "an explicit choice is never overridden");
+});
