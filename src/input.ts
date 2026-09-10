@@ -35,7 +35,14 @@ export class InputRouter {
     /** 1..7, remembered so Ctrl+arrow can cycle without reading game state. */
     private weaponSlot = 2;
 
-    constructor(private readonly engine: DoomEngine) {}
+    private readonly engine: DoomEngine;
+
+    // Written out rather than a constructor parameter property: those are not
+    // erasable TypeScript, and the tests import these modules straight into
+    // Node, which only strips types.
+    constructor(engine: DoomEngine) {
+        this.engine = engine;
+    }
 
     private keyValue(name: KeyName): number {
         return this.engine.keys[name];
