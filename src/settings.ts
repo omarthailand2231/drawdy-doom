@@ -2,7 +2,7 @@
 import { call } from "./protocol";
 import { DEFAULT_HOLD_TIMINGS } from "./input";
 import type { ImageFormat } from "./render/image-screen";
-import type { Rect, ResolutionId, ScreenStyle } from "./render/screen";
+import type { PaletteMode, Rect, ResolutionId, ScreenStyle } from "./render/screen";
 
 const KEY = "doom.settings";
 
@@ -19,6 +19,8 @@ export interface DoomSettings {
     imageFormat: ImageFormat;
     imageQuality: number;
     resolution: ResolutionId;
+    palette: PaletteMode;
+    shades: number;
     colorBits: number;
     samples: number;
     style: ScreenStyle;
@@ -33,10 +35,15 @@ export interface DoomSettings {
 }
 
 export const DEFAULT_SETTINGS: DoomSettings = {
-    displayMode: "image",
+    // Shapes by default: it is the only display every Drawdy build actually
+    // draws. Image mode is offered, probed at mount, and abandoned if the host
+    // turns out to drop component previews.
+    displayMode: "shapes",
     imageFormat: "image/webp",
     imageQuality: 0.82,
     resolution: "large",
+    palette: "color",
+    shades: 16,
     colorBits: 5,
     samples: 2,
     style: "pixel",

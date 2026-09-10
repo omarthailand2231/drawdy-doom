@@ -22,7 +22,16 @@ import { InputRouter } from "./input";
 import { call, initProtocol, subscribe, unsubscribe } from "./protocol";
 import { TEST_IMAGE_PNG, layoutProbes } from "./render/diagnostics";
 import { ImageScreen, imageDisplaySupported } from "./render/image-screen";
-import { CanvasScreen, RESOLUTIONS, type Rect, type ResolutionId, type ScreenStyle } from "./render/screen";
+import { frameLuminance, verifyDisplay } from "./render/verify";
+import {
+    CanvasScreen,
+    PALETTES,
+    RESOLUTIONS,
+    type PaletteMode,
+    type Rect,
+    type ResolutionId,
+    type ScreenStyle,
+} from "./render/screen";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type DisplayMode, type DoomSettings } from "./settings";
 import { consoleHtml } from "./ui/console-html";
 import { DOOM_ICON_SVG } from "./ui/icon";
@@ -41,6 +50,8 @@ const SLOW_STREAK_LIMIT = 24;
 const MIN_FRAME_DELAY_MS = 8;
 /** Lag past this is abandoned rather than chased. */
 const MAX_FRAME_LAG_MS = 250;
+/** Give up after this many fruitless remounts rather than thrashing the board. */
+const MAX_REMOUNTS = 2;
 
 const now = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
@@ -82,6 +93,12 @@ class DoomDriver {
     private lastBatch = 0;
     /** Loop diagnostics — surfaced in the console so a slow board can be explained. */
     private readonly diag = { loops: 0, ingests: 0, unchanged: 0, inFlight: 0, flushes: 0, stale: 0 };
+
+    /** Set once per mount: has this board been shown to actually draw components? */
+    private displayVerified = false;
+    private verifying = false;
+    /** Consecutive updates that matched nothing — see handleDrawOutcome. */
+    private missedBatches = 0;
 
     private probePreviewId: string | null = null;
     private probeCommittedIds: string[] = [];
@@ -156,6 +173,15 @@ class DoomDriver {
                         { id: "doom.display.image", title: "Full resolution (640 x 400)", onClick: () => void this.setDisplayMode("image") },
                         { id: "doom.display.shapes", title: "Shape grid (one rectangle per pixel)", onClick: () => void this.setDisplayMode("shapes") },
                     ],
+                },
+                {
+                    id: "doom.palette",
+                    title: "Colour",
+                    children: PALETTES.map((palette) => ({
+                        id: `doom.palette.${palette.id}`,
+                        title: palette.label,
+                        onClick: () => void this.setPalette(palette.id),
+                    })),
                 },
                 {
                     id: "doom.style",
@@ -314,6 +340,8 @@ class DoomDriver {
                 cols,
                 rows,
                 colorBits: this.settings.colorBits,
+                palette: this.settings.palette,
+                shades: this.settings.shades,
                 samples: this.settings.samples,
                 style: this.settings.style,
             });
@@ -336,6 +364,24 @@ class DoomDriver {
             return false;
         }
         this.previewId = created.value.previewId;
+        this.displayVerified = false;
+
+        // Some Drawdy builds accept a `component` preview at create time and
+        // then quietly drop it, so updates match nothing. Echo one update back
+        // at it: if the element is not live, the image display is not real
+        // here and the grid is the honest answer.
+        if (this.imageScreen) {
+            const echo = await call("command:scene:update-drawdy-preview-elements", {
+                elements: [this.imageScreen.placeholder()],
+            });
+            if (echo.error || echo.value.updated === 0) {
+                this.log("this board does not draw component previews — using the shape grid instead");
+                this.imageScreen = null;
+                this.settings.displayMode = "shapes";
+                saveSettings(this.settings);
+                return this.mountScreen(rect);
+            }
+        }
         this.settings.screen = rect;
         saveSettings(this.settings);
         return true;
@@ -496,6 +542,9 @@ class DoomDriver {
             if (!this.handleDrawOutcome(outcome, elements.length)) return;
             this.framesShown++;
             this.updateMs = this.updateMs === 0 ? elapsed : this.updateMs * 0.85 + elapsed * 0.15;
+            if (this.imageScreen && !this.displayVerified && !this.verifying && this.framesShown > 8) {
+                void this.verifyImageDisplay(frameLuminance(pixels, engine.width, engine.height));
+            }
         } finally {
             this.renderInFlight = false;
         }
@@ -513,18 +562,49 @@ class DoomDriver {
             return false;
         }
         // The preview batch can be dropped underneath us (board reload, another
-        // driver clearing previews). Nothing landing means it is gone: remount.
+        // driver clearing previews). Nothing landing means it is gone: remount
+        // — but only a couple of times. If remounting does not fix it, the host
+        // is refusing these elements and retrying forever just burns the board.
         if (outcome.value.updated === 0 && sent > 0) {
+            if (++this.missedBatches > MAX_REMOUNTS) {
+                this.log("the board keeps discarding this display — stopping");
+                void this.stop();
+                return false;
+            }
             this.log("preview batch went missing — remounting the screen");
             const rect = this.screen?.rect ?? this.imageScreen?.rect;
             if (rect) void this.remount(rect);
             return false;
         }
+        this.missedBatches = 0;
         return true;
     }
 
     private async remount(rect: Rect): Promise<void> {
         if (await this.mountScreen(rect)) this.screen?.invalidate();
+    }
+
+    /**
+     * Check the board is really showing the component, and fall back if not.
+     *
+     * A host that ignores component previews still answers `updated: 1`, so
+     * the only honest way to know is to look: screenshot the region and
+     * compare its brightness with the frame we just sent.
+     */
+    private async verifyImageDisplay(sentLuminance: number): Promise<void> {
+        const screen = this.imageScreen;
+        if (!screen || this.verifying) return;
+        this.verifying = true;
+        try {
+            const result = await verifyDisplay(screen.rect, sentLuminance);
+            if (result === "inconclusive") return;
+            this.displayVerified = true;
+            if (result === "drawn") return;
+            this.log("this board is not drawing component previews — switching to the shape grid");
+            await this.setDisplayMode("shapes");
+        } finally {
+            this.verifying = false;
+        }
     }
 
     /** Step the grid down when the board plainly cannot draw it fast enough. */
@@ -558,6 +638,23 @@ class DoomDriver {
         saveSettings(this.settings);
         this.log(mode === "image" ? "display: full resolution" : "display: shape grid");
         if (this.running) await this.mountScreen(this.screen?.rect ?? this.imageScreen?.rect ?? (await this.resolveScreenRect()));
+        this.pushState();
+    }
+
+    /**
+     * Monochrome is a performance setting as much as a look: the grid only
+     * sends a cell when its quantised colour changes, and one luminance ramp
+     * changes far less often than three independent channels.
+     */
+    private async setPalette(palette: PaletteMode): Promise<void> {
+        if (this.settings.palette === palette) return;
+        this.settings.palette = palette;
+        saveSettings(this.settings);
+        this.log(`colour: ${PALETTES.find((p) => p.id === palette)?.label ?? palette}`);
+        if (this.screen) {
+            this.screen.setOptions({ palette, shades: this.settings.shades });
+            this.screen.invalidate();
+        }
         this.pushState();
     }
 
@@ -757,6 +854,8 @@ class DoomDriver {
                 cells: this.lastBatch,
                 grid: this.imageScreen ? `640 x 400 (${(this.imageScreen.lastBytes / 1024).toFixed(0)} KB ${(this.imageScreen.actualFormat ?? "").replace("image/", "")})` : `${cols} x ${rows}`,
                 displayMode: this.settings.displayMode,
+                palette: this.settings.palette,
+                shades: this.settings.shades,
                 encodeMs: this.imageScreen?.lastEncodeMs ?? 0,
                 budgetMs: this.updateMs,
                 keys: this.input?.heldCount ?? 0,
@@ -917,6 +1016,15 @@ class DoomDriver {
                     this.settings.imageQuality = Math.min(1, Math.max(0.3, message.value));
                     saveSettings(this.settings);
                     if (this.running) await this.mountScreen(this.imageScreen?.rect ?? (await this.resolveScreenRect()));
+                } else if (message.key === "palette" && typeof message.value === "string") {
+                    await this.setPalette(message.value as PaletteMode);
+                } else if (message.key === "shades" && typeof message.value === "number") {
+                    this.settings.shades = Math.max(2, Math.min(64, Math.round(message.value)));
+                    saveSettings(this.settings);
+                    if (this.screen) {
+                        this.screen.setOptions({ shades: this.settings.shades });
+                        this.screen.invalidate();
+                    }
                 } else if (message.key === "autoQuality") {
                     this.settings.autoQuality = message.value === true;
                     saveSettings(this.settings);
