@@ -1,0 +1,28 @@
+{
+    "name": "drawdy-doom",
+    "version": "1.0.0",
+    "description": "DOOM, ported to the Drawdy canvas. The board is the display.",
+    "license": "GPL-2.0-or-later",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "fetch-doom": "node scripts/fetch-doom-wasm.mjs",
+        "predev": "node scripts/fetch-doom-wasm.mjs",
+        "dev": "vite",
+        "prebuild": "node scripts/fetch-doom-wasm.mjs",
+        "build": "node build.ts",
+        "typecheck": "tsc --noEmit",
+        "test": "node --test test/",
+        "demo": "node test/render-demo.mjs"
+    },
+    "devDependencies": {
+        "@drawdy/driver-protocol": "latest",
+        "@rollup/plugin-typescript": "^12.1.2",
+        "@types/node": "^20",
+        "fflate": "^0.8.2",
+        "rollup": "^4.34.0",
+        "tslib": "^2.8.1",
+        "typescript": "^5",
+        "vite": "^8.2.1"
+    }
+}

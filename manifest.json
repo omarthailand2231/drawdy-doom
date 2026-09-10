@@ -1,0 +1,8 @@
+{
+    "driverId": "drawdy.doom",
+    "driverName": "DOOM",
+    "driverVersion": "1.0.0",
+    "description": "Play the real DOOM (1993) on a Drawdy board. The game renders as live canvas shapes — the whiteboard is the display.",
+    "main": "main.js",
+    "permissions": ["dom", "scene", "storage"]
+}

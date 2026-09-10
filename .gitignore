@@ -1,0 +1,7 @@
+node_modules/
+dist/
+assets/*.wasm
+src/generated/
+.DS_Store
+*.log
+test/out/
