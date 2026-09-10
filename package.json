@@ -14,7 +14,8 @@
         "typecheck": "tsc --noEmit",
         "test": "node --test test/unit/*.test.mjs",
         "demo": "node test/render-demo.mjs",
-        "sim": "node test/host-sim.mjs 8"
+        "sim": "node test/host-sim.mjs 8",
+        "serve": "node scripts/serve.mjs"
     },
     "devDependencies": {
         "@drawdy/driver-protocol": "latest",

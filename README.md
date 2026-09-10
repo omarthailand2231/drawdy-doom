@@ -155,11 +155,24 @@ it into Drawdy. That single zip is the extension.
 
 ```bash
 npm install
-npm run dev            # vite on http://localhost:5174
+npm run dev            # vite on http://localhost:5174, rebuilds on save
 ```
 
 Then in Drawdy, on a **local** board: `⌘K` → **Add extension dev server** →
 `localhost:5174`. It hot-reloads on save.
+
+To *play* rather than edit, use the serve-only path instead:
+
+```bash
+npm run build
+npm run serve          # same port, ~24 MB resident instead of vite's ~400 MB
+```
+
+Drawdy only ever asks for `/version` and `/built.drawdyx`, so that is all it
+serves — from disk, watching `dist/` so a rebuild in another terminal still
+hot-reloads the board. Worth knowing because vite holding Rollup and a 2 MB
+base64 wasm string resident is enough for a memory-pressured machine to kill
+it mid-game.
 
 ```bash
 npm run build          # dist/drawdy-doom.drawdyx
