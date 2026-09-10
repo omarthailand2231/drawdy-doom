@@ -6,14 +6,8 @@
  * Both `atob` and `DecompressionStream` exist in worker scope (and in Node,
  * which is what lets the headless tests exercise this exact path).
  */
+import { base64ToBytes } from "../bytes";
 import { DOOM_WASM_BYTES, DOOM_WASM_GZ_BASE64 } from "../generated/doom-wasm";
-
-function base64ToBytes(base64: string): Uint8Array {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-}
 
 async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
     if (typeof DecompressionStream === "undefined") {
