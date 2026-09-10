@@ -21,6 +21,8 @@ import { KvSaveStore } from "./doom/saves";
 import { InputRouter } from "./input";
 import { call, initProtocol, subscribe, unsubscribe } from "./protocol";
 import { QualityGovernor, type QualityLevel } from "./quality";
+import { ASCII_RAMPS, AUTO_RAMP, AsciiScreen, resolveRamp } from "./render/ascii-screen";
+import { measureFont, type FontMetrics } from "./render/ascii-metrics";
 import { TEST_IMAGE_PNG, layoutProbes } from "./render/diagnostics";
 import { ImageScreen, imageDisplaySupported } from "./render/image-screen";
 import { frameLuminance, verifyDisplay } from "./render/verify";
@@ -69,6 +71,9 @@ class DoomDriver {
     /** Exactly one of these is live, according to `settings.displayMode`. */
     private screen: CanvasScreen | null = null;
     private imageScreen: ImageScreen | null = null;
+    private asciiScreen: AsciiScreen | null = null;
+    /** Measured once per board; the font does not change under us. */
+    private fontMetrics: FontMetrics | null = null;
     private backdropId: string | null = null;
     private imageElementId: string | null = null;
     private previewId: string | null = null;
@@ -169,6 +174,7 @@ class DoomDriver {
                     children: [
                         { id: "doom.display.image", title: "Full resolution (640 x 400)", onClick: () => void this.setDisplayMode("image") },
                         { id: "doom.display.shapes", title: "Shape grid (one rectangle per pixel)", onClick: () => void this.setDisplayMode("shapes") },
+                        { id: "doom.display.ascii", title: "ASCII (one text element per row)", onClick: () => void this.setDisplayMode("ascii") },
                     ],
                 },
                 {
@@ -341,7 +347,23 @@ class DoomDriver {
         await this.unmountScreen();
 
         let elements;
-        if (this.useImageDisplay()) {
+        if (this.settings.displayMode === "ascii") {
+            const metrics = await this.font();
+            const cols = Math.max(20, Math.min(400, Math.round(this.settings.asciiCols)));
+            this.asciiScreen = new AsciiScreen(rect, this.mintId, {
+                cols,
+                rows: 40, // replaced below, once the advance is known
+                ramp: resolveRamp(this.settings.asciiRamp, metrics?.monospaced ?? null),
+                gamma: this.settings.asciiGamma,
+                color: this.asciiColour(),
+                measuredAdvance: metrics?.advance ?? null,
+            });
+            // Rows follow from the glyph advance, so the picture stays upright.
+            this.asciiScreen.setOptions({
+                rows: this.asciiScreen.rowsForAspect(cols, SCREEN_ASPECT),
+            });
+            elements = [this.backdropElement(rect), ...this.asciiScreen.elements];
+        } else if (this.useImageDisplay()) {
             this.imageElementId ??= this.mintId();
             this.imageScreen = new ImageScreen(rect, this.imageElementId, {
                 format: this.settings.imageFormat,
@@ -373,6 +395,7 @@ class DoomDriver {
         if (created.error) {
             this.screen = null;
             this.imageScreen = null;
+            this.asciiScreen = null;
             const reason =
                 created.error.type === "unauthorized"
                     ? "scene permission denied — DOOM cannot draw on this board"
@@ -412,6 +435,39 @@ class DoomDriver {
         }
         this.screen = null;
         this.imageScreen = null;
+        this.asciiScreen = null;
+    }
+
+    /** ASCII is monochrome by nature; borrow the palette for its ink colour. */
+    private asciiColour(): string {
+        switch (this.settings.palette) {
+            case "amber":
+                return "#ffb000";
+            case "green":
+                return "#3dff7a";
+            default:
+                return this.styling?.foreground ?? "#e6e6e6";
+        }
+    }
+
+    /** Measure the board's text once, and remember what we found. */
+    private async font(): Promise<FontMetrics | null> {
+        if (this.fontMetrics) return this.fontMetrics;
+        const ramp =
+            ASCII_RAMPS.find((r) => r.id === resolveRamp(this.settings.asciiRamp, null)) ?? ASCII_RAMPS[0]!;
+        const measured = await measureFont(this.mintId, ramp.chars.trim() || "#");
+        if (measured) {
+            this.fontMetrics = measured;
+            this.log(
+                `font measured: ${measured.advance.toFixed(3)} em per glyph, ` +
+                    (measured.monospaced
+                        ? "monospaced — columns will line up"
+                        : "proportional — try the block ramp if it shears")
+            );
+        } else {
+            this.log("the board would not measure its font; using the ramp's own assumption");
+        }
+        return measured;
     }
 
     // -------------------------------------------------------------- run / stop
@@ -534,7 +590,16 @@ class DoomDriver {
         let elapsed = 0;
         try {
             let elements;
-            if (this.imageScreen) {
+            if (this.asciiScreen) {
+                this.diag.ingests++;
+                this.asciiScreen.ingest(pixels, engine.width, engine.height);
+                if (this.asciiScreen.pendingLines === 0) {
+                    this.diag.unchanged++;
+                    return;
+                }
+                elements = this.asciiScreen.takeDirty();
+                this.lastBatch = elements.length;
+            } else if (this.imageScreen) {
                 // The BGRA -> RGBA pass runs before encode() awaits, so the
                 // frame is safely consumed before DOOM can touch it again.
                 const source = await this.imageScreen.encode(pixels, engine.width, engine.height);
@@ -590,7 +655,7 @@ class DoomDriver {
                 return false;
             }
             this.log("preview batch went missing — remounting the screen");
-            const rect = this.screen?.rect ?? this.imageScreen?.rect;
+            const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect;
             if (rect) void this.remount(rect);
             return false;
         }
@@ -655,7 +720,7 @@ class DoomDriver {
         this.resetQuality();
         saveSettings(this.settings);
         if (!this.running) return;
-        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? (await this.resolveScreenRect());
+        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect ?? (await this.resolveScreenRect());
         await this.mountScreen(rect);
         this.pushState();
     }
@@ -665,7 +730,7 @@ class DoomDriver {
         this.settings.displayMode = mode;
         saveSettings(this.settings);
         this.log(mode === "image" ? "display: full resolution" : "display: shape grid");
-        if (this.running) await this.mountScreen(this.screen?.rect ?? this.imageScreen?.rect ?? (await this.resolveScreenRect()));
+        if (this.running) await this.mountScreen(this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect ?? (await this.resolveScreenRect()));
         this.pushState();
     }
 
@@ -678,6 +743,10 @@ class DoomDriver {
         if (this.settings.palette === palette) return;
         this.settings.palette = palette;
         this.resetQuality();
+        if (this.asciiScreen) {
+            this.asciiScreen.setOptions({ color: this.asciiColour() });
+            this.asciiScreen.invalidate();
+        }
         saveSettings(this.settings);
         this.log(`colour: ${PALETTES.find((p) => p.id === palette)?.label ?? palette}`);
         if (this.screen) {
@@ -691,7 +760,7 @@ class DoomDriver {
         this.settings.style = style;
         saveSettings(this.settings);
         if (!this.running) return;
-        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? (await this.resolveScreenRect());
+        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect ?? (await this.resolveScreenRect());
         await this.mountScreen(rect);
     }
 
@@ -701,7 +770,7 @@ class DoomDriver {
         this.log(`pointer steering ${enabled ? "on" : "off"}`);
         if (this.running) {
             // hit-testability is fixed when the batch is created, so remount.
-            const rect = this.screen?.rect ?? this.imageScreen?.rect ?? (await this.resolveScreenRect());
+            const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect ?? (await this.resolveScreenRect());
             await this.mountScreen(rect);
         }
         await this.syncPointerSubscriptions();
@@ -730,6 +799,14 @@ class DoomDriver {
         this.settings.screen = rect;
         saveSettings(this.settings);
         if (!this.running) return;
+        if (this.asciiScreen) {
+            this.asciiScreen.setRect(rect);
+            this.asciiScreen.invalidate();
+            await call("command:scene:update-drawdy-preview-elements", {
+                elements: [this.backdropElement(rect), ...this.asciiScreen.elements],
+            });
+            return;
+        }
         if (this.imageScreen) {
             this.imageScreen.setRect(rect);
             await call("command:scene:update-drawdy-preview-elements", {
@@ -747,7 +824,7 @@ class DoomDriver {
     }
 
     private async flyToScreen(): Promise<void> {
-        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.settings.screen;
+        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect ?? this.settings.screen;
         if (!rect) return;
         await call("command:camera:fly-to-rect", { rect, flyDurationMs: 420, zoom: 4 });
     }
@@ -882,7 +959,9 @@ class DoomDriver {
                 fps: this.fps,
                 tics: this.engine?.tics ?? 0,
                 cells: this.lastBatch,
-                grid: this.imageScreen ? `640 x 400 (${(this.imageScreen.lastBytes / 1024).toFixed(0)} KB ${(this.imageScreen.actualFormat ?? "").replace("image/", "")})` : `${cols} x ${rows}`,
+                grid: this.asciiScreen
+                    ? `${this.asciiScreen.options.cols} x ${this.asciiScreen.lineCount} chars`
+                    : this.imageScreen ? `640 x 400 (${(this.imageScreen.lastBytes / 1024).toFixed(0)} KB ${(this.imageScreen.actualFormat ?? "").replace("image/", "")})` : `${cols} x ${rows}`,
                 displayMode: this.settings.displayMode,
                 palette: this.settings.palette,
                 encodeMs: this.imageScreen?.lastEncodeMs ?? 0,
@@ -890,6 +969,12 @@ class DoomDriver {
                 keys: this.input?.heldCount ?? 0,
                 resolution: this.settings.resolution,
                 degraded: this.governor?.degraded ?? false,
+                asciiRamp: this.settings.asciiRamp,
+                asciiCols: this.settings.asciiCols,
+                asciiGamma: this.settings.asciiGamma,
+                font: this.fontMetrics
+                    ? `${this.fontMetrics.advance.toFixed(2)} em${this.fontMetrics.monospaced ? " mono" : ""}`
+                    : null,
                 shades: level.shades,
                 mouseLook: this.settings.mouseLook,
                 autoQuality: this.settings.autoQuality,
@@ -1047,6 +1132,28 @@ class DoomDriver {
                     this.settings.imageQuality = Math.min(1, Math.max(0.3, message.value));
                     saveSettings(this.settings);
                     if (this.running) await this.mountScreen(this.imageScreen?.rect ?? (await this.resolveScreenRect()));
+                } else if (message.key === "asciiRamp" && typeof message.value === "string") {
+                    this.settings.asciiRamp = message.value;
+                    saveSettings(this.settings);
+                    if (this.asciiScreen) {
+                        this.asciiScreen.setOptions({
+                            ramp: resolveRamp(message.value, this.fontMetrics?.monospaced ?? null),
+                        });
+                        this.asciiScreen.invalidate();
+                    }
+                } else if (message.key === "asciiGamma" && typeof message.value === "number") {
+                    this.settings.asciiGamma = Math.max(0.2, Math.min(2, message.value));
+                    saveSettings(this.settings);
+                    if (this.asciiScreen) {
+                        this.asciiScreen.setOptions({ gamma: this.settings.asciiGamma });
+                        this.asciiScreen.invalidate();
+                    }
+                } else if (message.key === "asciiCols" && typeof message.value === "number") {
+                    this.settings.asciiCols = Math.max(20, Math.min(400, Math.round(message.value)));
+                    saveSettings(this.settings);
+                    if (this.running && this.asciiScreen) {
+                        await this.mountScreen(this.asciiScreen.rect);
+                    }
                 } else if (message.key === "palette" && typeof message.value === "string") {
                     await this.setPalette(message.value as PaletteMode);
                 } else if (message.key === "shades" && typeof message.value === "number") {
@@ -1089,7 +1196,7 @@ class DoomDriver {
 
     private onPointerPosition(position: { x: number; y: number }): void {
         if (!this.running || !this.settings.mouseLook || !this.input || !this.engine) return;
-        const rect = this.screen?.rect ?? this.imageScreen?.rect;
+        const rect = this.screen?.rect ?? this.imageScreen?.rect ?? this.asciiScreen?.rect;
         if (!rect) return;
         const time = now();
         if (time - this.lastSteerAt < 16) return;
@@ -1117,7 +1224,9 @@ class DoomDriver {
             return;
         }
         const onScreen =
-            body.drawdyElementIds?.some((id) => this.screen?.owns(id) || id === this.imageElementId) ?? false;
+            body.drawdyElementIds?.some(
+                (id) => this.screen?.owns(id) || this.asciiScreen?.owns(id) || id === this.imageElementId
+            ) ?? false;
         if (body.type === "down" && onScreen) {
             this.input.holdExternal(POINTER, this.engine.keys.FIRE);
         } else if (body.type === "up") {

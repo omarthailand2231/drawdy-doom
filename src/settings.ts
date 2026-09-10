@@ -6,7 +6,7 @@ import type { PaletteMode, Rect, ResolutionId, ScreenStyle } from "./render/scre
 
 const KEY = "doom.settings";
 
-export type DisplayMode = "image" | "shapes";
+export type DisplayMode = "image" | "shapes" | "ascii";
 
 export interface DoomSettings {
     /**
@@ -14,11 +14,18 @@ export interface DoomSettings {
      * `shapes` one canvas rectangle per cell — lower resolution, but pure
      *          Drawdy elements, and the fallback when a browser has no
      *          OffscreenCanvas in workers.
+     * `ascii`  one text element per *row* of characters. Roughly forty times
+     *          fewer elements than the grid, at the cost of colour.
      */
     displayMode: DisplayMode;
     imageFormat: ImageFormat;
     imageQuality: number;
     resolution: ResolutionId;
+    /** Characters across, for the ASCII display; rows follow from the font. */
+    asciiCols: number;
+    /** A ramp id, or "auto" to choose from the measured font. */
+    asciiRamp: string;
+    asciiGamma: number;
     palette: PaletteMode;
     shades: number;
     colorBits: number;
@@ -42,6 +49,9 @@ export const DEFAULT_SETTINGS: DoomSettings = {
     imageFormat: "image/webp",
     imageQuality: 0.82,
     resolution: "large",
+    asciiCols: 160,
+    asciiRamp: "auto",
+    asciiGamma: 0.62,
     palette: "color",
     shades: 16,
     colorBits: 5,

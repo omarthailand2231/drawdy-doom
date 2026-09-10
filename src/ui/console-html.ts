@@ -12,6 +12,7 @@
  */
 import type { ModuleStyling } from "@drawdy/driver-protocol";
 import { CONTROL_SCHEME, WEAPON_SLOTS } from "../doom/keys";
+import { ASCII_RAMPS } from "../render/ascii-screen";
 import { PALETTES, RESOLUTIONS } from "../render/screen";
 
 const escapeHtml = (value: string): string =>
@@ -26,6 +27,9 @@ export function consoleHtml(styling: ModuleStyling): string {
     ).join("");
     const paletteOptions = PALETTES.map(
         (palette) => `<option value="${palette.id}">${escapeHtml(palette.label)}</option>`
+    ).join("");
+    const rampOptions = [{ id: "auto", label: "Auto — from the measured font" }, ...ASCII_RAMPS].map(
+        (ramp) => `<option value="${ramp.id}">${escapeHtml(ramp.label)}</option>`
     ).join("");
     const controlRows = CONTROL_SCHEME.map(
         (c) => `<tr><td class="keycap">${escapeHtml(c.keys)}</td><td>${escapeHtml(c.action)}</td></tr>`
@@ -139,14 +143,27 @@ export function consoleHtml(styling: ModuleStyling): string {
   <section>
     <div class="label">Display</div>
     <select id="mode">
-      <option value="image">Full resolution — 640 x 400</option>
       <option value="shapes">Shape grid — one rectangle per pixel</option>
+      <option value="ascii">ASCII — one text element per row</option>
+      <option value="image">Full resolution — 640 x 400</option>
     </select>
     <div id="imageOnly" style="margin-top:6px">
       <label class="toggle" style="justify-content:space-between">
         <span>Image quality <b id="qval">82</b></span>
         <input type="range" id="quality" min="40" max="100" step="2" value="82" style="flex:1 1 90px" />
       </label>
+    </div>
+    <div id="asciiOnly" hidden>
+      <select id="ramp" style="margin-top:6px">${rampOptions}</select>
+      <label class="toggle" style="justify-content:space-between;margin-top:6px">
+        <span>Columns <b id="cval">160</b></span>
+        <input type="range" id="cols" min="40" max="320" step="8" value="160" style="flex:1 1 90px" />
+      </label>
+      <label class="toggle" style="justify-content:space-between;margin-top:4px">
+        <span>Brightness <b id="gval">0.62</b></span>
+        <input type="range" id="gamma" min="30" max="150" step="2" value="62" style="flex:1 1 90px" />
+      </label>
+      <div class="wad" id="fontNote"></div>
     </div>
     <div id="gridOnly">
       <select id="res" style="margin-top:6px">${resolutionOptions}</select>
@@ -170,7 +187,7 @@ export function consoleHtml(styling: ModuleStyling): string {
   <section class="stats" id="stats">
     <div><span>fps</span><span id="s-fps">–</span></div>
     <div><span>tics</span><span id="s-tics">–</span></div>
-    <div><span>cells/frame</span><span id="s-cells">–</span></div>
+    <div><span id="s-cells-label">cells/frame</span><span id="s-cells">–</span></div>
     <div><span>grid</span><span id="s-grid">–</span></div>
     <div><span>draw</span><span id="s-budget">–</span></div>
     <div><span>encode</span><span id="s-encode">–</span></div>
@@ -281,6 +298,11 @@ export function consoleHtml(styling: ModuleStyling): string {
   byId("res").addEventListener("change", function (e) { post({ t: "set", key: "resolution", value: e.target.value }); });
   byId("mode").addEventListener("change", function (e) { post({ t: "set", key: "displayMode", value: e.target.value }); });
   byId("palette").addEventListener("change", function (e) { post({ t: "set", key: "palette", value: e.target.value }); });
+  byId("ramp").addEventListener("change", function (e) { post({ t: "set", key: "asciiRamp", value: e.target.value }); });
+  byId("cols").addEventListener("change", function (e) { post({ t: "set", key: "asciiCols", value: Number(e.target.value) }); });
+  byId("cols").addEventListener("input", function (e) { byId("cval").textContent = e.target.value; });
+  byId("gamma").addEventListener("change", function (e) { post({ t: "set", key: "asciiGamma", value: Number(e.target.value) / 100 }); });
+  byId("gamma").addEventListener("input", function (e) { byId("gval").textContent = (Number(e.target.value) / 100).toFixed(2); });
   byId("shades").addEventListener("change", function (e) { post({ t: "set", key: "shades", value: Number(e.target.value) }); });
   byId("shades").addEventListener("input", function (e) { byId("sval").textContent = e.target.value; });
   byId("probe").addEventListener("click", function () { post({ t: "cmd", id: "probe" }); });
@@ -323,10 +345,19 @@ export function consoleHtml(styling: ModuleStyling): string {
       byId("s-grid").textContent = message.grid || "–";
       byId("s-budget").textContent = message.budgetMs != null ? message.budgetMs.toFixed(1) + " ms" : "–";
       byId("s-encode").textContent = message.encodeMs ? message.encodeMs.toFixed(1) + " ms" : "–";
+      byId("s-cells-label").textContent = message.displayMode === "ascii" ? "rows/frame" : "cells/frame";
       if (message.displayMode && byId("mode").value !== message.displayMode) byId("mode").value = message.displayMode;
       var isImage = message.displayMode === "image";
+      var isAscii = message.displayMode === "ascii";
       byId("imageOnly").hidden = !isImage;
-      byId("gridOnly").hidden = isImage;
+      byId("asciiOnly").hidden = !isAscii;
+      byId("gridOnly").hidden = isImage || isAscii;
+      if (message.asciiRamp && byId("ramp").value !== message.asciiRamp) byId("ramp").value = message.asciiRamp;
+      if (message.asciiCols && Number(byId("cols").value) !== message.asciiCols) {
+        byId("cols").value = String(message.asciiCols);
+        byId("cval").textContent = String(message.asciiCols);
+      }
+      if (message.font) byId("fontNote").textContent = "font: " + message.font;
       if (message.palette && byId("palette").value !== message.palette) byId("palette").value = message.palette;
       byId("shadesRow").hidden = !message.palette || message.palette === "color";
       if (message.shades && Number(byId("shades").value) !== message.shades) {
