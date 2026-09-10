@@ -66,9 +66,22 @@ export interface AsciiOptions {
      * glyphs; below 1 this opens the midtones out across the whole ramp.
      */
     gamma: number;
+    /**
+     * Pivots around mid-grey: above 1 pushes lights and darks apart, below 1
+     * pulls them together. Gamma alone lifts everything, which brightens a
+     * dark scene but does not make it any easier to read; contrast is what
+     * separates a wall from the doorway in it.
+     */
+    contrast: number;
     color: string;
     /** Samples per cell axis when downscaling. */
     samples: number;
+    /**
+     * Drop the blank step from the ramp so the darkest level is still a drawn
+     * glyph. A space leaves a hole in the picture; the faintest character
+     * gives black some substance and the image reads as continuous.
+     */
+    fillDark: boolean;
     /**
      * Glyph width as a fraction of font size. Null means "use the ramp's
      * assumption"; {@link measureFont} replaces it with the real thing.
@@ -81,14 +94,19 @@ export const DEFAULT_ASCII_OPTIONS: AsciiOptions = {
     rows: 60,
     ramp: "classic",
     charAspect: 0.5,
-    fontScale: 1.05,
+    fontScale: 0.95,
     gamma: 0.62,
+    contrast: 1.35,
     color: "#e6e6e6",
     samples: 2,
+    fillDark: true,
     measuredAdvance: null,
 };
 
 type TextElement = Extract<DrawdyPreviewElementSchema, { type: "text" }>;
+
+/** How much wider than the text each row's box is made. */
+const WIDTH_SLACK = 1.6;
 
 export class AsciiScreen {
     readonly options: AsciiOptions;
@@ -113,7 +131,8 @@ export class AsciiScreen {
     }
 
     get rampChars(): string {
-        return (ASCII_RAMPS.find((r) => r.id === this.options.ramp) ?? ASCII_RAMPS[0]!).chars;
+        const chars = (ASCII_RAMPS.find((r) => r.id === this.options.ramp) ?? ASCII_RAMPS[0]!).chars;
+        return this.options.fillDark ? chars.replace(/^ +/, "") : chars;
     }
 
     private get rampAdvance(): number {
@@ -181,9 +200,14 @@ export class AsciiScreen {
                 drawdyElementId: id,
                 x: 0,
                 y: 0,
+                width: 1,
+                height: 1,
                 text: "",
                 fontSize: 12,
                 color,
+                // Both stated outright: an unstated width is a width the host
+                // gets to choose, and a chosen one wraps the row.
+                textAlign: "left",
             };
         }
         this.previous = new Array<string>(rows).fill("");
@@ -206,11 +230,17 @@ export class AsciiScreen {
         // Font size is driven by the width a glyph must occupy, so columns
         // reach the right edge; the row pitch then keeps the picture upright.
         const fontSize = Math.max(1, (cellWidth / this.rampAdvance) * fontScale);
+        // Give the box real slack: a row that measures even slightly wider
+        // than its element wraps, and a wrapped row destroys the picture. The
+        // spare width is empty space and cannot be seen.
+        const boxWidth = cols * this.rampAdvance * fontSize * WIDTH_SLACK;
         for (let row = 0; row < rows; row++) {
             const line = this.lines[row]!;
             line.x = this.rect.x;
             // Text is drawn from its top-left in Drawdy, so no baseline nudge.
             line.y = this.rect.y + row * rowHeight;
+            line.width = boxWidth;
+            line.height = fontSize * 1.4;
             line.fontSize = fontSize;
             line.color = this.options.color;
         }
@@ -254,9 +284,9 @@ export class AsciiScreen {
         const perCell = samples * samples;
         const ramp = this.rampChars;
         const top = ramp.length - 1;
-        const { gamma } = this.options;
+        const { gamma, contrast } = this.options;
         // A 256-entry lookup keeps Math.pow out of a per-cell loop.
-        const curve = this.curve(top, gamma);
+        const curve = this.curve(top, gamma, contrast);
         const taps = this.taps;
         const scratch = this.scratch;
 
@@ -302,16 +332,46 @@ export class AsciiScreen {
 
     private curveCache: { key: string; table: Uint8Array } | null = null;
 
-    /** luma 0..255 -> ramp index, with the tone curve baked in. */
-    private curve(top: number, gamma: number): Uint8Array {
-        const key = `${top}:${gamma}`;
+    /** luma 0..255 -> ramp index, with contrast and gamma baked in. */
+    private curve(top: number, gamma: number, contrast: number): Uint8Array {
+        const key = `${top}:${gamma}:${contrast}`;
         if (this.curveCache?.key === key) return this.curveCache.table;
         const table = new Uint8Array(256);
         for (let i = 0; i < 256; i++) {
-            table[i] = Math.min(top, Math.round(Math.pow(i / 255, gamma) * top));
+            // Contrast first, around mid-grey, then the gamma lift.
+            const stretched = Math.min(255, Math.max(0, (i - 128) * contrast + 128));
+            table[i] = Math.min(top, Math.round(Math.pow(stretched / 255, gamma) * top));
         }
         this.curveCache = { key, table };
         return table;
+    }
+
+    /** The width one row is meant to span, for fit calibration. */
+    get targetWidth(): number {
+        return this.rect.width;
+    }
+
+    get fontSize(): number {
+        return this.lines[0]?.fontSize ?? 0;
+    }
+
+    /**
+     * Correct the font size from a row the host actually measured.
+     *
+     * The advance we start from is an estimate; this closes the loop, so the
+     * picture spans the screen exactly whatever font the board turned out to
+     * be using.
+     *
+     * @returns true when the scale moved enough to be worth repainting.
+     */
+    fitToMeasuredWidth(measuredWidth: number): boolean {
+        if (!(measuredWidth > 0)) return false;
+        const correction = this.targetWidth / measuredWidth;
+        if (!Number.isFinite(correction) || correction < 0.2 || correction > 5) return false;
+        if (Math.abs(correction - 1) < 0.02) return false;
+        this.options.fontScale *= correction;
+        this.layout();
+        return true;
     }
 
     /** The picture as plain text — used by the tests to eyeball a frame. */

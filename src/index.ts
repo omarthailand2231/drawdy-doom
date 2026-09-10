@@ -51,6 +51,12 @@ const MIN_FRAME_DELAY_MS = 8;
 const MAX_FRAME_LAG_MS = 250;
 /** Give up after this many fruitless remounts rather than thrashing the board. */
 const MAX_REMOUNTS = 2;
+/**
+ * Columns of ASCII. Generous because columns are close to free — an element
+ * is a whole row, so only the row count (which follows from the glyph aspect)
+ * decides how many elements a frame costs. 640 is DOOM's own frame width.
+ */
+const MAX_ASCII_COLS = 640;
 
 const now = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
@@ -99,6 +105,8 @@ class DoomDriver {
     /** Set once per mount: has this board been shown to actually draw components? */
     private displayVerified = false;
     private verifying = false;
+    /** ASCII only: has a real row been measured and the font size corrected? */
+    private fitCalibrated = false;
     /** Consecutive updates that matched nothing — see handleDrawOutcome. */
     private missedBatches = 0;
 
@@ -349,12 +357,14 @@ class DoomDriver {
         let elements;
         if (this.settings.displayMode === "ascii") {
             const metrics = await this.font();
-            const cols = Math.max(20, Math.min(400, Math.round(this.settings.asciiCols)));
+            const cols = Math.max(20, Math.min(MAX_ASCII_COLS, Math.round(this.settings.asciiCols)));
             this.asciiScreen = new AsciiScreen(rect, this.mintId, {
                 cols,
                 rows: 40, // replaced below, once the advance is known
                 ramp: resolveRamp(this.settings.asciiRamp, metrics?.monospaced ?? null),
                 gamma: this.settings.asciiGamma,
+                contrast: this.settings.asciiContrast,
+                fillDark: this.settings.asciiFillDark,
                 color: this.asciiColour(),
                 measuredAdvance: metrics?.advance ?? null,
             });
@@ -406,6 +416,7 @@ class DoomDriver {
         }
         this.previewId = created.value.previewId;
         this.displayVerified = false;
+        this.fitCalibrated = false;
 
         // Some Drawdy builds accept a `component` preview at create time and
         // then quietly drop it, so updates match nothing. Echo one update back
@@ -625,6 +636,10 @@ class DoomDriver {
             if (!this.handleDrawOutcome(outcome, elements.length)) return;
             this.framesShown++;
             this.updateMs = this.updateMs === 0 ? elapsed : this.updateMs * 0.85 + elapsed * 0.15;
+            if (this.asciiScreen && !this.fitCalibrated && this.framesShown > 2) {
+                this.fitCalibrated = true;
+                void this.calibrateAsciiFit();
+            }
             if (this.imageScreen && !this.displayVerified && !this.verifying && this.framesShown > 8) {
                 void this.verifyImageDisplay(frameLuminance(pixels, engine.width, engine.height));
             }
@@ -665,6 +680,29 @@ class DoomDriver {
 
     private async remount(rect: Rect): Promise<void> {
         if (await this.mountScreen(rect)) this.screen?.invalidate();
+    }
+
+    /**
+     * Size the ASCII font from a row the board actually rendered.
+     *
+     * The glyph advance we start from is an estimate, and an estimate that is
+     * even slightly low makes rows overflow their element and wrap, which
+     * destroys the picture. Measuring a live row closes the loop.
+     */
+    private async calibrateAsciiFit(): Promise<void> {
+        const screen = this.asciiScreen;
+        if (!screen) return;
+        const id = screen.elements[Math.floor(screen.lineCount / 2)]?.drawdyElementId;
+        if (!id) return;
+        const rects = await call("command:scene:element-rects", { drawdyElementIds: [id] });
+        if (rects.error) return;
+        const measured = rects.value.rects[0]?.rect.width ?? 0;
+        if (!screen.fitToMeasuredWidth(measured)) return;
+        this.log(
+            `row measured ${measured.toFixed(0)} against ${screen.targetWidth.toFixed(0)} wide — ` +
+                `font resized to ${screen.fontSize.toFixed(1)}`
+        );
+        screen.invalidate();
     }
 
     /**
@@ -972,6 +1010,8 @@ class DoomDriver {
                 asciiRamp: this.settings.asciiRamp,
                 asciiCols: this.settings.asciiCols,
                 asciiGamma: this.settings.asciiGamma,
+                asciiContrast: this.settings.asciiContrast,
+                fillDark: this.settings.asciiFillDark,
                 font: this.fontMetrics
                     ? `${this.fontMetrics.advance.toFixed(2)} em${this.fontMetrics.monospaced ? " mono" : ""}`
                     : null,
@@ -1141,6 +1181,13 @@ class DoomDriver {
                         });
                         this.asciiScreen.invalidate();
                     }
+                } else if (message.key === "fillDark") {
+                    this.settings.asciiFillDark = message.value === true;
+                    saveSettings(this.settings);
+                    if (this.asciiScreen) {
+                        this.asciiScreen.setOptions({ fillDark: this.settings.asciiFillDark });
+                        this.asciiScreen.invalidate();
+                    }
                 } else if (message.key === "asciiGamma" && typeof message.value === "number") {
                     this.settings.asciiGamma = Math.max(0.2, Math.min(2, message.value));
                     saveSettings(this.settings);
@@ -1148,8 +1195,15 @@ class DoomDriver {
                         this.asciiScreen.setOptions({ gamma: this.settings.asciiGamma });
                         this.asciiScreen.invalidate();
                     }
+                } else if (message.key === "asciiContrast" && typeof message.value === "number") {
+                    this.settings.asciiContrast = Math.max(0.5, Math.min(3, message.value));
+                    saveSettings(this.settings);
+                    if (this.asciiScreen) {
+                        this.asciiScreen.setOptions({ contrast: this.settings.asciiContrast });
+                        this.asciiScreen.invalidate();
+                    }
                 } else if (message.key === "asciiCols" && typeof message.value === "number") {
-                    this.settings.asciiCols = Math.max(20, Math.min(400, Math.round(message.value)));
+                    this.settings.asciiCols = Math.max(20, Math.min(MAX_ASCII_COLS, Math.round(message.value)));
                     saveSettings(this.settings);
                     if (this.running && this.asciiScreen) {
                         await this.mountScreen(this.asciiScreen.rect);
