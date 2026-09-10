@@ -12,8 +12,9 @@
         "prebuild": "node scripts/fetch-doom-wasm.mjs",
         "build": "node build.ts",
         "typecheck": "tsc --noEmit",
-        "test": "node --test test/",
-        "demo": "node test/render-demo.mjs"
+        "test": "node --test test/unit/*.test.mjs",
+        "demo": "node test/render-demo.mjs",
+        "sim": "node test/host-sim.mjs 8"
     },
     "devDependencies": {
         "@drawdy/driver-protocol": "latest",
