@@ -29,11 +29,38 @@ export interface Rect {
 
 export type ScreenStyle = "pixel" | "sketch";
 
+/**
+ * Colour treatment.
+ *
+ * This is not only a look. The grid sends a cell whenever its *quantised*
+ * colour changes, so collapsing three channels into one luminance ramp cuts
+ * both the palette and the number of cells that count as having changed —
+ * monochrome is materially cheaper to draw as well as being rather handsome.
+ */
+export type PaletteMode = "color" | "mono" | "amber" | "green";
+
+/** Multipliers applied to a luminance ramp, per monochrome palette. */
+const TINTS: Record<Exclude<PaletteMode, "color">, [number, number, number]> = {
+    mono: [1, 1, 1],
+    amber: [1, 0.72, 0.16],
+    green: [0.22, 1, 0.34],
+};
+
+export const PALETTES: readonly { id: PaletteMode; label: string }[] = [
+    { id: "color", label: "Colour" },
+    { id: "mono", label: "Monochrome" },
+    { id: "amber", label: "Amber CRT" },
+    { id: "green", label: "Green phosphor" },
+];
+
 export interface ScreenOptions {
     cols: number;
     rows: number;
     /** Bits per colour channel used for both display and change detection. */
     colorBits: number;
+    palette: PaletteMode;
+    /** Shades in a monochrome ramp. Fewer shades, fewer cells changing. */
+    shades: number;
     /** Samples per cell axis when downscaling (1 = point sample, 4 = 16 taps). */
     samples: number;
     /** Grown into neighbours to hide hairline seams between cells. */
@@ -45,6 +72,8 @@ export const DEFAULT_SCREEN_OPTIONS: ScreenOptions = {
     cols: 80,
     rows: 50,
     colorBits: 6,
+    palette: "color",
+    shades: 16,
     samples: 2,
     bleed: 0.6,
     style: "pixel",
@@ -80,6 +109,8 @@ export class CanvasScreen {
     private hex: (string | undefined)[] = [];
     private hexShift = 0;
     private hexMask = 0;
+    /** Precomputed ramp for the monochrome palettes; empty in colour mode. */
+    private ramp: string[] = [];
 
     /**
      * Cells changed since the last {@link takeDirty}. This accumulates across
@@ -165,6 +196,7 @@ export class CanvasScreen {
         this.hexShift = 8 - colorBits;
         this.hexMask = (1 << colorBits) - 1;
         this.hex = new Array<string | undefined>(1 << (colorBits * 3));
+        this.ramp = this.buildRamp();
 
         this.cells = new Array<Cell>(count);
         this.index.clear();
@@ -246,6 +278,22 @@ export class CanvasScreen {
         this.invalidate();
     }
 
+    /** One hex string per shade, built once so the hot loop only indexes. */
+    private buildRamp(): string[] {
+        const { palette, shades } = this.options;
+        if (palette === "color") return [];
+        const tint = TINTS[palette];
+        const steps = Math.max(2, Math.min(256, Math.round(shades)));
+        const ramp = new Array<string>(steps);
+        for (let i = 0; i < steps; i++) {
+            const level = Math.round((i / (steps - 1)) * 255);
+            const channel = (index: number): number =>
+                Math.max(0, Math.min(255, Math.round(level * tint[index]!)));
+            ramp[i] = `#${((1 << 24) | (channel(0) << 16) | (channel(1) << 8) | channel(2)).toString(16).slice(1)}`;
+        }
+        return ramp;
+    }
+
     private hexFor(quantised: number): string {
         const cached = this.hex[quantised];
         if (cached !== undefined) return cached;
@@ -279,6 +327,11 @@ export class CanvasScreen {
         const flags = this.dirtyFlags;
         let changed = 0;
 
+        const ramp = this.ramp;
+        const monochrome = ramp.length > 0;
+        // 255 maps to the last shade; scaled here so the loop only multiplies.
+        const rampScale = monochrome ? (ramp.length - 1) / 255 : 0;
+
         let tap = 0;
         for (let i = 0; i < count; i++) {
             let blue = 0;
@@ -290,14 +343,23 @@ export class CanvasScreen {
                 green += frame[offset + 1]!;
                 red += frame[offset + 2]!;
             }
-            const quantised =
-                (((red / perCell) | 0) >> shift) * (1 << (colorBits * 2)) +
-                ((((green / perCell) | 0) >> shift) << colorBits) +
-                ((((blue / perCell) | 0) >> shift));
+
+            let quantised: number;
+            if (monochrome) {
+                // Rec. 601 luma, then straight onto the ramp.
+                const luma =
+                    (0.299 * red + 0.587 * green + 0.114 * blue) / perCell;
+                quantised = (luma * rampScale + 0.5) | 0;
+            } else {
+                quantised =
+                    (((red / perCell) | 0) >> shift) * (1 << (colorBits * 2)) +
+                    ((((green / perCell) | 0) >> shift) << colorBits) +
+                    ((((blue / perCell) | 0) >> shift));
+            }
 
             if (quantised === previous[i]) continue;
             previous[i] = quantised;
-            const colour = this.hexFor(quantised);
+            const colour = monochrome ? ramp[quantised]! : this.hexFor(quantised);
             const cell = cells[i]!;
             cell.fillColor = colour;
             cell.strokeColor = colour;
