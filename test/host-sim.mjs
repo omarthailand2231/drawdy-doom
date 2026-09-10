@@ -17,7 +17,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodePng } from "./lib/png.mjs";
-import { timerReport } from "./out/timer-probe.mjs";
+import { timerReport } from "./lib/timer-probe.mjs";
 import { installOffscreenCanvasDouble } from "./lib/offscreen-canvas-double.mjs";
 
 // Node has no OffscreenCanvas; stand one in so the image display path runs here too.
