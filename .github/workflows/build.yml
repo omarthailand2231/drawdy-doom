@@ -1,0 +1,77 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      # The engine is fetched at build time and pinned by SHA-256, so the cache
+      # key is the fetch script itself — change the pin, get a fresh download.
+      - name: Cache the DOOM engine
+        uses: actions/cache@v4
+        with:
+          path: assets
+          key: doom-wasm-${{ hashFiles('scripts/fetch-doom-wasm.mjs') }}
+
+      - run: npm run fetch-doom
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Check the package is a well-formed .drawdyx
+        run: |
+          package=$(ls dist/*.drawdyx)
+          echo "packed $package ($(stat -c%s "$package") bytes)"
+          unzip -l "$package"
+          # Exactly two entries: the manifest and the CommonJS bundle.
+          test "$(unzip -Z1 "$package" | sort | tr '\n' ' ')" = "main.js manifest.json "
+          unzip -p "$package" manifest.json | node -e '
+            const manifest = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            if (manifest.main !== "main.js") throw new Error("main must be main.js");
+            if (!manifest.driverId) throw new Error("driverId missing");
+            console.log("manifest ok:", manifest.driverId, manifest.driverVersion);
+          '
+          # Drawdy reads the bundle's named exports; prove they are there.
+          unzip -p "$package" main.js > /tmp/main.cjs
+          node -e '
+            const driver = require("/tmp/main.cjs");
+            for (const name of ["activate", "onEvent"]) {
+              if (typeof driver[name] !== "function") throw new Error(name + " is not exported");
+            }
+            console.log("bundle exports activate and onEvent");
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drawdy-doom
+          path: dist/*.drawdyx
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: drawdy-doom
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "*.drawdyx"
+          generate_release_notes: true
