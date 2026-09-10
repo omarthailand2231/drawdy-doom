@@ -147,6 +147,10 @@ export function consoleHtml(styling: ModuleStyling): string {
     </div>
     <select id="res" style="margin-top:6px" hidden>${resolutionOptions}</select>
     <div class="row" style="margin-top:6px">
+      <button id="probe">Diagnose display</button>
+      <button id="probeClear">Clear probes</button>
+    </div>
+    <div class="row" style="margin-top:6px">
       <label class="toggle"><input type="checkbox" id="wasd" checked /> WASD</label>
       <label class="toggle"><input type="checkbox" id="mouse" /> Mouse steer</label>
       <label class="toggle"><input type="checkbox" id="auto" checked /> Auto quality</label>
@@ -266,6 +270,8 @@ export function consoleHtml(styling: ModuleStyling): string {
 
   byId("res").addEventListener("change", function (e) { post({ t: "set", key: "resolution", value: e.target.value }); });
   byId("mode").addEventListener("change", function (e) { post({ t: "set", key: "displayMode", value: e.target.value }); });
+  byId("probe").addEventListener("click", function () { post({ t: "cmd", id: "probe" }); });
+  byId("probeClear").addEventListener("click", function () { post({ t: "cmd", id: "probe-clear" }); });
   byId("quality").addEventListener("change", function (e) {
     post({ t: "set", key: "imageQuality", value: Number(e.target.value) / 100 });
   });
