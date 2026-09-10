@@ -56,6 +56,13 @@ export interface AsciiOptions {
     cols: number;
     rows: number;
     ramp: string;
+    /**
+     * Characters to use instead of the named ramp, darkest first. Set from
+     * {@link discoverUniformRamp}, whose glyphs are all the same width on
+     * this board — which is what stops rows changing length as the picture
+     * changes.
+     */
+    customChars: string | null;
     /** Glyph cell width / height. Raise it if the picture looks squashed. */
     charAspect: number;
     /** Font size as a fraction of the row height. */
@@ -93,6 +100,7 @@ export const DEFAULT_ASCII_OPTIONS: AsciiOptions = {
     cols: 160,
     rows: 60,
     ramp: "classic",
+    customChars: null,
     charAspect: 0.5,
     fontScale: 0.95,
     gamma: 0.62,
@@ -131,8 +139,12 @@ export class AsciiScreen {
     }
 
     get rampChars(): string {
-        const chars = (ASCII_RAMPS.find((r) => r.id === this.options.ramp) ?? ASCII_RAMPS[0]!).chars;
-        return this.options.fillDark ? chars.replace(/^ +/, "") : chars;
+        const named = (ASCII_RAMPS.find((r) => r.id === this.options.ramp) ?? ASCII_RAMPS[0]!).chars;
+        const chars = this.options.customChars ?? named;
+        if (this.options.fillDark) return chars.replace(/^ +/, "");
+        // A measured ramp has no blank of its own; give it one so true black
+        // stays black rather than becoming the faintest glyph.
+        return this.options.customChars ? ` ${chars}` : chars;
     }
 
     private get rampAdvance(): number {

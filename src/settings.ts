@@ -56,7 +56,7 @@ export const DEFAULT_SETTINGS: DoomSettings = {
     asciiRamp: "auto",
     asciiGamma: 0.62,
     asciiContrast: 1.35,
-    asciiFillDark: true,
+    asciiFillDark: false,
     palette: "color",
     shades: 16,
     colorBits: 5,

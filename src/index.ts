@@ -22,7 +22,7 @@ import { InputRouter } from "./input";
 import { call, initProtocol, subscribe, unsubscribe } from "./protocol";
 import { QualityGovernor, type QualityLevel } from "./quality";
 import { ASCII_RAMPS, AUTO_RAMP, AsciiScreen, resolveRamp } from "./render/ascii-screen";
-import { measureFont, type FontMetrics } from "./render/ascii-metrics";
+import { discoverUniformRamp, measureFont, type DiscoveredRamp, type FontMetrics } from "./render/ascii-metrics";
 import { TEST_IMAGE_PNG, layoutProbes } from "./render/diagnostics";
 import { ImageScreen, imageDisplaySupported } from "./render/image-screen";
 import { frameLuminance, verifyDisplay } from "./render/verify";
@@ -80,6 +80,9 @@ class DoomDriver {
     private asciiScreen: AsciiScreen | null = null;
     /** Measured once per board; the font does not change under us. */
     private fontMetrics: FontMetrics | null = null;
+    /** A ramp measured to be uniform-width on this board; null until probed. */
+    private uniformRamp: DiscoveredRamp | null = null;
+    private rampProbed = false;
     private backdropId: string | null = null;
     private imageElementId: string | null = null;
     private previewId: string | null = null;
@@ -357,16 +360,21 @@ class DoomDriver {
         let elements;
         if (this.settings.displayMode === "ascii") {
             const metrics = await this.font();
+            await this.probeUniformRamp();
             const cols = Math.max(20, Math.min(MAX_ASCII_COLS, Math.round(this.settings.asciiCols)));
             this.asciiScreen = new AsciiScreen(rect, this.mintId, {
                 cols,
                 rows: 40, // replaced below, once the advance is known
                 ramp: resolveRamp(this.settings.asciiRamp, metrics?.monospaced ?? null),
+                customChars: this.settings.asciiRamp === AUTO_RAMP ? (this.uniformRamp?.chars ?? null) : null,
                 gamma: this.settings.asciiGamma,
                 contrast: this.settings.asciiContrast,
                 fillDark: this.settings.asciiFillDark,
                 color: this.asciiColour(),
-                measuredAdvance: metrics?.advance ?? null,
+                measuredAdvance:
+                    (this.settings.asciiRamp === AUTO_RAMP ? this.uniformRamp?.advance : null) ??
+                    metrics?.advance ??
+                    null,
             });
             // Rows follow from the glyph advance, so the picture stays upright.
             this.asciiScreen.setOptions({
@@ -459,6 +467,25 @@ class DoomDriver {
             default:
                 return this.styling?.foreground ?? "#e6e6e6";
         }
+    }
+
+    /**
+     * Find a set of glyphs this board renders at one width.
+     *
+     * Rows appear to breathe because a proportional font draws `.` narrower
+     * than `@`, so a row's width follows its content. Choosing the ramp by
+     * measurement removes the cause. Probed once per board.
+     */
+    private async probeUniformRamp(): Promise<void> {
+        if (this.rampProbed || this.settings.asciiRamp !== AUTO_RAMP) return;
+        this.rampProbed = true;
+        const discovered = await discoverUniformRamp(this.mintId);
+        if (!discovered) return;
+        this.uniformRamp = discovered;
+        this.log(
+            `ramp measured: ${discovered.kept} of ${discovered.considered} glyphs share a width — ` +
+                `using "${discovered.chars}"`
+        );
     }
 
     /** Measure the board's text once, and remember what we found. */
@@ -1012,6 +1039,7 @@ class DoomDriver {
                 asciiGamma: this.settings.asciiGamma,
                 asciiContrast: this.settings.asciiContrast,
                 fillDark: this.settings.asciiFillDark,
+                ramp: this.uniformRamp?.chars ?? null,
                 font: this.fontMetrics
                     ? `${this.fontMetrics.advance.toFixed(2)} em${this.fontMetrics.monospaced ? " mono" : ""}`
                     : null,

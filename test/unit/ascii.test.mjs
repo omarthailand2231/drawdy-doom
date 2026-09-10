@@ -159,3 +159,25 @@ test("every ramp runs dark to light", () => {
         assert.ok(ramp.advance > 0.2 && ramp.advance < 1.5, `${ramp.id} has an implausible advance`);
     }
 });
+
+test("a measured ramp replaces the named one", () => {
+    // Whatever glyphs the board renders at one width beat any ramp we shipped.
+    const screen = make({ ramp: "classic", customChars: "-=+*#", fillDark: true });
+    assert.equal(screen.rampChars, "-=+*#");
+});
+
+test("a measured ramp still gets a blank for true black", () => {
+    // Discovery returns only inked glyphs, so without this the darkest pixel
+    // would draw the faintest character rather than nothing.
+    const screen = make({ customChars: "-=+*#", fillDark: false });
+    assert.equal(screen.rampChars, " -=+*#");
+    screen.setOptions({ fillDark: true });
+    assert.equal(screen.rampChars, "-=+*#");
+});
+
+test("every glyph in a measured ramp is used across a gradient", () => {
+    const screen = make({ cols: 60, rows: 2, customChars: "-=+*#", fillDark: true, gamma: 1, contrast: 1 });
+    screen.ingest(gradient(240, 20), 240, 20);
+    const used = new Set(screen.elements[0].text.split(""));
+    assert.equal(used.size, 5);
+});

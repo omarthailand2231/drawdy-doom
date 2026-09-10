@@ -167,7 +167,7 @@ export function consoleHtml(styling: ModuleStyling): string {
         <span>Contrast <b id="ctval">1.35</b></span>
         <input type="range" id="contrast" min="50" max="300" step="5" value="135" style="flex:1 1 90px" />
       </label>
-      <label class="toggle" style="margin-top:6px"><input type="checkbox" id="fillDark" checked /> Fill dark areas</label>
+      <label class="toggle" style="margin-top:6px"><input type="checkbox" id="fillDark" /> Fill dark areas (slower)</label>
       <div class="wad" id="fontNote"></div>
     </div>
     <div id="gridOnly">
@@ -377,7 +377,10 @@ export function consoleHtml(styling: ModuleStyling): string {
         byId("cols").value = String(message.asciiCols);
         byId("cval").textContent = String(message.asciiCols);
       }
-      if (message.font) byId("fontNote").textContent = "font: " + message.font;
+      if (message.font) {
+        byId("fontNote").textContent =
+          "font: " + message.font + (message.ramp ? "  ·  ramp " + message.ramp : "");
+      }
       if (typeof message.fillDark === "boolean") byId("fillDark").checked = message.fillDark;
       if (message.asciiContrast && Number(byId("contrast").value) !== Math.round(message.asciiContrast * 100)) {
         byId("contrast").value = String(Math.round(message.asciiContrast * 100));
