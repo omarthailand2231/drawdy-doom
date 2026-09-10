@@ -166,14 +166,23 @@ test("tinted palettes are the same ramp in a different colour", () => {
 });
 
 test("fewer shades means fewer cells change — the whole point", () => {
+    // Any single step can happen to straddle a ramp boundary, so the claim is
+    // about the aggregate: walk a slow brightness ramp and count how much each
+    // one reports. This is exactly what a corridor's lighting does to the grid.
     const coarse = make({ cols: 16, rows: 10, palette: "mono", shades: 4 });
     const fine = make({ cols: 16, rows: 10, palette: "mono", shades: 48 });
-    const first = solid(64, 40, [120, 120, 120]);
-    const nudged = solid(64, 40, [132, 132, 132]); // a small lighting change
-    coarse.ingest(first, 64, 40);
-    fine.ingest(first, 64, 40);
-    coarse.takeDirty();
-    fine.takeDirty();
-    assert.equal(coarse.ingest(nudged, 64, 40), 0, "coarse ramp absorbs it");
-    assert.ok(fine.ingest(nudged, 64, 40) > 0, "fine ramp notices it");
+    let coarseTotal = 0;
+    let fineTotal = 0;
+    for (let value = 60; value <= 200; value += 4) {
+        const frame = solid(64, 40, [value, value, value]);
+        coarseTotal += coarse.ingest(frame, 64, 40);
+        fineTotal += fine.ingest(frame, 64, 40);
+        coarse.takeDirty();
+        fine.takeDirty();
+    }
+    assert.ok(coarseTotal > 0, "a coarse ramp still tracks real changes");
+    assert.ok(
+        coarseTotal * 4 < fineTotal,
+        `4 shades should send far less than 48: ${coarseTotal} vs ${fineTotal}`
+    );
 });
