@@ -26,6 +26,9 @@ export interface DoomSettings {
     /** A ramp id, or "auto" to choose from the measured font. */
     asciiRamp: string;
     asciiGamma: number;
+    asciiContrast: number;
+    /** Draw the darkest level as a faint glyph rather than leaving it blank. */
+    asciiFillDark: boolean;
     palette: PaletteMode;
     shades: number;
     colorBits: number;
@@ -52,6 +55,8 @@ export const DEFAULT_SETTINGS: DoomSettings = {
     asciiCols: 160,
     asciiRamp: "auto",
     asciiGamma: 0.62,
+    asciiContrast: 1.35,
+    asciiFillDark: true,
     palette: "color",
     shades: 16,
     colorBits: 5,

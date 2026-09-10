@@ -157,12 +157,17 @@ export function consoleHtml(styling: ModuleStyling): string {
       <select id="ramp" style="margin-top:6px">${rampOptions}</select>
       <label class="toggle" style="justify-content:space-between;margin-top:6px">
         <span>Columns <b id="cval">160</b></span>
-        <input type="range" id="cols" min="40" max="320" step="8" value="160" style="flex:1 1 90px" />
+        <input type="range" id="cols" min="40" max="640" step="8" value="160" style="flex:1 1 90px" />
       </label>
       <label class="toggle" style="justify-content:space-between;margin-top:4px">
         <span>Brightness <b id="gval">0.62</b></span>
         <input type="range" id="gamma" min="30" max="150" step="2" value="62" style="flex:1 1 90px" />
       </label>
+      <label class="toggle" style="justify-content:space-between;margin-top:4px">
+        <span>Contrast <b id="ctval">1.35</b></span>
+        <input type="range" id="contrast" min="50" max="300" step="5" value="135" style="flex:1 1 90px" />
+      </label>
+      <label class="toggle" style="margin-top:6px"><input type="checkbox" id="fillDark" checked /> Fill dark areas</label>
       <div class="wad" id="fontNote"></div>
     </div>
     <div id="gridOnly">
@@ -197,7 +202,10 @@ export function consoleHtml(styling: ModuleStyling): string {
   <details>
     <summary>Controls (board keyboard)</summary>
     <table>${controlRows}</table>
-    <div class="wad" style="margin-top:6px">With the console focused you also get vanilla DOOM keys: digits pick weapons, Ctrl fires, Space opens.</div>
+    <div class="wad" style="margin-top:6px">
+      With the console focused: <b>WASD</b> move and strafe, <b>Space</b> or <b>Ctrl</b> shoot,
+      <b>E</b> or <b>F</b> opens doors, <b>1</b>–<b>7</b> pick weapons, <b>,</b> <b>.</b> strafe.
+    </div>
   </details>
 
   <details>
@@ -220,16 +228,25 @@ export function consoleHtml(styling: ModuleStyling): string {
   var focusBox = byId("focus");
   var logBox = byId("log");
   var captured = false;
+  // Space and the arrows scroll a page; while we hold the keyboard, they must not.
+  window.addEventListener("keydown", function (event) {
+    if (!captured) return;
+    if (event.key === " " || event.key.indexOf("Arrow") === 0 || event.key === "Tab") event.preventDefault();
+  }, { capture: true, passive: false });
   var running = false;
 
   // ---- keyboard -----------------------------------------------------------
   // Symbolic names only; the driver owns the numeric DOOM key values.
   var NAMED = {
     ArrowLeft: "LEFTARROW", ArrowRight: "RIGHTARROW", ArrowUp: "UPARROW", ArrowDown: "DOWNARROW",
-    Control: "FIRE", " ": "USE", Shift: "SHIFT", Tab: "TAB", Escape: "ESCAPE",
+    // Space shoots. Vanilla DOOM opens doors with it, but every shooter since
+    // has shot with it, and the board's own scheme already does — one key
+    // should not mean two things depending on where the focus is.
+    Control: "FIRE", " ": "FIRE", Shift: "SHIFT", Tab: "TAB", Escape: "ESCAPE",
     Enter: "ENTER", Backspace: "BACKSPACE", Alt: "ALT", ",": "STRAFE_L", ".": "STRAFE_R"
   };
-  var WASD = { w: "UPARROW", s: "DOWNARROW", a: "STRAFE_L", d: "STRAFE_R" };
+  // Use moves to E and F, where a modern player will reach for it anyway.
+  var WASD = { w: "UPARROW", s: "DOWNARROW", a: "STRAFE_L", d: "STRAFE_R", e: "USE", f: "USE" };
 
   function translate(event) {
     if (byId("wasd").checked) {
@@ -299,6 +316,9 @@ export function consoleHtml(styling: ModuleStyling): string {
   byId("mode").addEventListener("change", function (e) { post({ t: "set", key: "displayMode", value: e.target.value }); });
   byId("palette").addEventListener("change", function (e) { post({ t: "set", key: "palette", value: e.target.value }); });
   byId("ramp").addEventListener("change", function (e) { post({ t: "set", key: "asciiRamp", value: e.target.value }); });
+  byId("fillDark").addEventListener("change", function (e) { post({ t: "set", key: "fillDark", value: e.target.checked }); });
+  byId("contrast").addEventListener("change", function (e) { post({ t: "set", key: "asciiContrast", value: Number(e.target.value) / 100 }); });
+  byId("contrast").addEventListener("input", function (e) { byId("ctval").textContent = (Number(e.target.value) / 100).toFixed(2); });
   byId("cols").addEventListener("change", function (e) { post({ t: "set", key: "asciiCols", value: Number(e.target.value) }); });
   byId("cols").addEventListener("input", function (e) { byId("cval").textContent = e.target.value; });
   byId("gamma").addEventListener("change", function (e) { post({ t: "set", key: "asciiGamma", value: Number(e.target.value) / 100 }); });
@@ -358,6 +378,11 @@ export function consoleHtml(styling: ModuleStyling): string {
         byId("cval").textContent = String(message.asciiCols);
       }
       if (message.font) byId("fontNote").textContent = "font: " + message.font;
+      if (typeof message.fillDark === "boolean") byId("fillDark").checked = message.fillDark;
+      if (message.asciiContrast && Number(byId("contrast").value) !== Math.round(message.asciiContrast * 100)) {
+        byId("contrast").value = String(Math.round(message.asciiContrast * 100));
+        byId("ctval").textContent = message.asciiContrast.toFixed(2);
+      }
       if (message.palette && byId("palette").value !== message.palette) byId("palette").value = message.palette;
       byId("shadesRow").hidden = !message.palette || message.palette === "color";
       if (message.shades && Number(byId("shades").value) !== message.shades) {
