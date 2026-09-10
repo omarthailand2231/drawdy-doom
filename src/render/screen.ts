@@ -44,7 +44,7 @@ export interface ScreenOptions {
 export const DEFAULT_SCREEN_OPTIONS: ScreenOptions = {
     cols: 80,
     rows: 50,
-    colorBits: 5,
+    colorBits: 6,
     samples: 2,
     bleed: 0.6,
     style: "pixel",
@@ -57,6 +57,7 @@ export const RESOLUTIONS = [
     { id: "medium", label: "Medium — 80 x 50 (4,000 cells)", cols: 80, rows: 50 },
     { id: "large", label: "Large — 128 x 80 (10,240 cells)", cols: 128, rows: 80 },
     { id: "insane", label: "Insane — 160 x 100 (16,000 cells)", cols: 160, rows: 100 },
+    { id: "absurd", label: "Absurd — 213 x 133 (28,329 cells)", cols: 213, rows: 133 },
 ] as const;
 
 export type ResolutionId = (typeof RESOLUTIONS)[number]["id"];
@@ -69,6 +70,8 @@ export class CanvasScreen {
 
     /** One prebuilt, reused element per cell. */
     private cells: Cell[] = [];
+    /** Element id -> cell index, for turning a pointer hit back into a screen position. */
+    private readonly index = new Map<string, number>();
     /** Last quantised colour per cell; -1 means "never drawn". */
     private previous = new Int32Array(0);
     /** Byte offsets into the frame buffer, `samples²` of them per cell. */
@@ -78,11 +81,20 @@ export class CanvasScreen {
     private hexShift = 0;
     private hexMask = 0;
 
-    /** Indices of cells whose colour changed on the last `ingest`. */
-    readonly dirty: number[] = [];
+    /**
+     * Cells changed since the last {@link takeDirty}. This accumulates across
+     * frames on purpose: DOOM can draw several frames while one canvas update
+     * is still in flight, and dropping the earlier deltas would leave the
+     * screen torn.
+     */
+    private readonly dirty: number[] = [];
+    private dirtyFlags = new Uint8Array(0);
 
-    constructor(rect: Rect, options: Partial<ScreenOptions> = {}) {
+    private readonly mintId: () => string;
+
+    constructor(rect: Rect, mintId: () => string, options: Partial<ScreenOptions> = {}) {
         this.options = { ...DEFAULT_SCREEN_OPTIONS, ...options };
+        this.mintId = mintId;
         this.rect = rect;
         this.rebuild();
     }
@@ -132,6 +144,20 @@ export class CanvasScreen {
         this.previous.fill(-1);
     }
 
+    /** Cell index for an element id reported by a pointer hit, or -1. */
+    indexOfElement(id: string): number {
+        return this.index.get(id) ?? -1;
+    }
+
+    /** True when this element id belongs to the screen. */
+    owns(id: string): boolean {
+        return this.index.has(id);
+    }
+
+    get pendingCells(): number {
+        return this.dirty.length;
+    }
+
     private rebuild(): void {
         const { cols, rows, colorBits } = this.options;
         const count = cols * rows;
@@ -141,11 +167,14 @@ export class CanvasScreen {
         this.hex = new Array<string | undefined>(1 << (colorBits * 3));
 
         this.cells = new Array<Cell>(count);
+        this.index.clear();
         for (let i = 0; i < count; i++) {
+            const id = this.mintId();
+            this.index.set(id, i);
             this.cells[i] = {
                 type: "shape",
                 componentType: "rect",
-                drawdyElementId: `doom-px-${i}`,
+                drawdyElementId: id,
                 x: 0,
                 y: 0,
                 width: 1,
@@ -162,6 +191,8 @@ export class CanvasScreen {
             };
         }
         this.previous = new Int32Array(count).fill(-1);
+        this.dirtyFlags = new Uint8Array(count);
+        this.dirty.length = 0;
         this.tapsKey = "";
         this.layout();
     }
@@ -245,7 +276,8 @@ export class CanvasScreen {
         const previous = this.previous;
         const cells = this.cells;
         const dirty = this.dirty;
-        dirty.length = 0;
+        const flags = this.dirtyFlags;
+        let changed = 0;
 
         let tap = 0;
         for (let i = 0; i < count; i++) {
@@ -269,17 +301,32 @@ export class CanvasScreen {
             const cell = cells[i]!;
             cell.fillColor = colour;
             cell.strokeColor = colour;
+            changed++;
+            if (flags[i]) continue;
+            flags[i] = 1;
             dirty.push(i);
         }
-        return dirty.length;
+        return changed;
     }
 
-    /** The changed cells, ready for `command:scene:update-drawdy-preview-elements`. */
-    dirtyElements(): Cell[] {
+    /**
+     * Hand over the changed cells for
+     * `command:scene:update-drawdy-preview-elements` and reset the accumulator.
+     *
+     * The returned objects are the live, reused cell elements — the caller must
+     * not let another `ingest` run until the update has been serialised.
+     */
+    takeDirty(): Cell[] {
         const cells = this.cells;
         const dirty = this.dirty;
+        const flags = this.dirtyFlags;
         const batch = new Array<Cell>(dirty.length);
-        for (let i = 0; i < dirty.length; i++) batch[i] = cells[dirty[i]!]!;
+        for (let i = 0; i < dirty.length; i++) {
+            const cell = dirty[i]!;
+            batch[i] = cells[cell]!;
+            flags[cell] = 0;
+        }
+        dirty.length = 0;
         return batch;
     }
 }
