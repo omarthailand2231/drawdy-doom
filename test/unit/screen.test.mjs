@@ -128,3 +128,52 @@ test("every advertised resolution keeps DOOM's 16:10 shape", () => {
         assert.ok(Math.abs(aspect - 1.6) < 0.02, `${resolution.id} is ${aspect.toFixed(3)}:1`);
     }
 });
+
+test("monochrome collapses the palette to its ramp", () => {
+    const screen = make({ palette: "mono", shades: 8 });
+    const seen = new Set();
+    for (const value of [0, 40, 90, 140, 200, 255]) {
+        screen.ingest(solid(64, 40, [value, value, value]), 64, 40);
+        seen.add(screen.elements[0].fillColor);
+    }
+    assert.ok(seen.size <= 8, `expected at most 8 shades, saw ${seen.size}`);
+    for (const hex of seen) {
+        assert.equal(hex.slice(1, 3), hex.slice(3, 5), `${hex} should be neutral grey`);
+        assert.equal(hex.slice(3, 5), hex.slice(5, 7));
+    }
+});
+
+test("monochrome judges by luminance, not by any one channel", () => {
+    const screen = make({ palette: "mono", shades: 32 });
+    screen.ingest(solid(64, 40, [0, 255, 0]), 64, 40); // green is the bright one
+    const green = screen.elements[0].fillColor;
+    screen.ingest(solid(64, 40, [0, 0, 255]), 64, 40); // blue is much darker
+    const blue = screen.elements[0].fillColor;
+    assert.ok(parseInt(green.slice(1, 3), 16) > parseInt(blue.slice(1, 3), 16));
+});
+
+test("tinted palettes are the same ramp in a different colour", () => {
+    const amber = make({ palette: "amber", shades: 8 });
+    const green = make({ palette: "green", shades: 8 });
+    const frame = solid(64, 40, [200, 200, 200]);
+    // Same number of cells change: the tint is applied after quantisation, so
+    // it cannot cost anything extra.
+    assert.equal(amber.ingest(frame, 64, 40), green.ingest(frame, 64, 40));
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(amber.elements[0].fillColor.slice(i, i + 2), 16));
+    assert.ok(r > g && g > b, `amber should fall off red > green > blue, got ${amber.elements[0].fillColor}`);
+    const [gr, gg] = [1, 3].map((i) => parseInt(green.elements[0].fillColor.slice(i, i + 2), 16));
+    assert.ok(gg > gr, "green phosphor should lead with green");
+});
+
+test("fewer shades means fewer cells change — the whole point", () => {
+    const coarse = make({ cols: 16, rows: 10, palette: "mono", shades: 4 });
+    const fine = make({ cols: 16, rows: 10, palette: "mono", shades: 48 });
+    const first = solid(64, 40, [120, 120, 120]);
+    const nudged = solid(64, 40, [132, 132, 132]); // a small lighting change
+    coarse.ingest(first, 64, 40);
+    fine.ingest(first, 64, 40);
+    coarse.takeDirty();
+    fine.takeDirty();
+    assert.equal(coarse.ingest(nudged, 64, 40), 0, "coarse ramp absorbs it");
+    assert.ok(fine.ingest(nudged, 64, 40) > 0, "fine ramp notices it");
+});

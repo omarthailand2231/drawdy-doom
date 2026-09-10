@@ -4,7 +4,7 @@
  * canvas cell grid would show. Eyeballing test/out/*.png is the fastest way to
  * confirm the whole display path before loading the driver into a board.
  *
- *   node test/render-demo.mjs [ticks] [resolution]
+ *   node test/render-demo.mjs [ticks] [resolution] [palette] [shades]
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -19,6 +19,8 @@ mkdirSync(OUT, { recursive: true });
 const totalTics = Number(process.argv[2] ?? 700);
 const resolutionId = process.argv[3] ?? "medium";
 const resolution = RESOLUTIONS.find((r) => r.id === resolutionId) ?? RESOLUTIONS[2];
+const palette = process.argv[4] ?? "color";
+const shades = Number(process.argv[5] ?? 16);
 
 const { engine, frame } = await bootDoom();
 console.log(`booted DOOM — frame buffer ${engine.width}x${engine.height}`);
@@ -27,9 +29,11 @@ let minted = 0;
 const screen = new CanvasScreen(
     { x: 0, y: 0, width: 1280, height: 800 },
     () => `cell-${minted++}`,
-    { cols: resolution.cols, rows: resolution.rows }
+    { cols: resolution.cols, rows: resolution.rows, palette, shades }
 );
-console.log(`display grid ${screen.options.cols}x${screen.options.rows} = ${screen.cellCount} cells`);
+console.log(
+    `display grid ${screen.options.cols}x${screen.options.rows} = ${screen.cellCount} cells, ${palette}${palette === "color" ? "" : ` @ ${shades} shades`}`
+);
 
 const K = engine.keys;
 // Escape out of the attract-loop demo, start a new game on the default skill,
@@ -81,7 +85,7 @@ for (let tic = 0; tic < totalTics; tic++) {
 
     if (shots.has(tic)) {
         const cells = renderCells(screen, Math.max(2, Math.round(640 / screen.options.cols)));
-        writeFileSync(join(OUT, `cells-${String(tic).padStart(4, "0")}.png`), encodePng(cells.width, cells.height, cells.rgba));
+        writeFileSync(join(OUT, `cells-${palette}-${String(tic).padStart(4, "0")}.png`), encodePng(cells.width, cells.height, cells.rgba));
         writeFileSync(
             join(OUT, `frame-${String(tic).padStart(4, "0")}.png`),
             encodePng(frame.width, frame.height, bgraToRgba(frame.pixels, frame.width, frame.height))
