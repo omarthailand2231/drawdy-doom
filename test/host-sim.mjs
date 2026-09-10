@@ -33,6 +33,7 @@ copyFileSync(join(ROOT, "dist", "main.js"), bundlePath);
 const driver = createRequire(import.meta.url)(bundlePath);
 
 const seconds = Number(process.argv[2] ?? 4);
+const displayMode = process.argv[3] ?? null;
 
 // ---------------------------------------------------------------- fake host
 
@@ -43,6 +44,7 @@ let previewSeq = 0;
 let subscriptionSeq = 0;
 let updates = 0;
 let lastImageSource = null;
+let createdBatches = 0;
 const updateTimes = [];
 let updatedElements = 0;
 let biggestUpdate = 0;
@@ -88,6 +90,7 @@ async function issueCommand(request) {
         case "command:scene:create-drawdy-preview-elements":
             scene.clear();
             for (const element of req.elements) scene.set(element.drawdyElementId, { ...element });
+            createdBatches++;
             return ok({ previewed: req.elements.length, previewId: `preview-${previewSeq++}` });
         case "command:scene:update-drawdy-preview-elements": {
             for (const element of req.elements) {
@@ -109,6 +112,18 @@ async function issueCommand(request) {
             await new Promise((resolve) => setImmediate(resolve));
             return ok({ updated: hits });
         }
+        case "command:scene:element-rects":
+            // Stand in for a monospaced font at 0.6 em per glyph.
+            return ok({
+                rects: req.drawdyElementIds.map((id) => {
+                    const element = scene.get(id);
+                    const text = element?.text ?? "";
+                    return {
+                        drawdyElementId: id,
+                        rect: { x: element?.x ?? 0, y: element?.y ?? 0, width: text.length * (element?.fontSize ?? 12) * 0.6, height: element?.fontSize ?? 12 },
+                    };
+                }),
+            });
         case "command:scene:delete-drawdy-preview-elements":
             scene.clear();
             return ok({ deleted: req.previewIds.length });
@@ -165,6 +180,13 @@ console.log(`activate() done in ${Date.now() - wall} ms`);
 console.log(`  menus + subscriptions registered: ${listeners.length}`);
 
 // Right-click -> DOOM -> Start
+if (displayMode) {
+    emit("subscription:webview:message", {
+        webviewDomId: "doom-console",
+        message: { t: "set", key: "displayMode", value: displayMode },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+}
 const booted = Date.now();
 emit("subscription:dom:element-clicked", { domElementId: "doom-action-button", clientX: 0, clientY: 0 });
 emit("subscription:context-menu:clicked", { menuId: "doom.start" });
@@ -207,6 +229,14 @@ await sleep(200);
 
 // ------------------------------------------------------------------- results
 
+const textRows = snapshot.filter((e) => e.type === "text" && typeof e.text === "string" && e.text.length > 8);
+if (textRows.length > 0) {
+    textRows.sort((a, b) => a.y - b.y);
+    console.log(`\nASCII display — ${textRows.length} rows, ${textRows[0].text.length} columns, font ${textRows[0].fontSize.toFixed(1)}\n`);
+    console.log(textRows.map((row) => row.text).join("\n"));
+    console.log(`\npreview batches created: ${createdBatches}`);
+    process.exit(0);
+}
 const cells = snapshot.filter((e) => e.width < 100);
 const xs = [...new Set(cells.map((c) => Math.round(c.x)))].sort((a, b) => a - b);
 const ys = [...new Set(cells.map((c) => Math.round(c.y)))].sort((a, b) => a - b);
