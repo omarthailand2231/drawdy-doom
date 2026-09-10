@@ -98,6 +98,10 @@ test/palette-bench.mjs`):
 Amber CRT and green phosphor are the same ramp with a tint, and cost exactly
 the same. A third of the traffic, and it still reads perfectly as DOOM.
 
+![DOOM in amber-CRT mode on the board](docs/amber-crt.png)
+
+*Amber, 12 shades, 128×80 — 1,160 of 10,240 cells change per frame.*
+
 The frames are **preview** elements: they render without committing, so playing DOOM never touches undo, never syncs to collaborators
 and never ends up in the saved document. Switch modes from the console or
 right-click → **DOOM** → **Display**.
