@@ -23,8 +23,10 @@ const resolution = RESOLUTIONS.find((r) => r.id === resolutionId) ?? RESOLUTIONS
 const { engine, frame } = await bootDoom();
 console.log(`booted DOOM — frame buffer ${engine.width}x${engine.height}`);
 
+let minted = 0;
 const screen = new CanvasScreen(
     { x: 0, y: 0, width: 1280, height: 800 },
+    () => `cell-${minted++}`,
     { cols: resolution.cols, rows: resolution.rows }
 );
 console.log(`display grid ${screen.options.cols}x${screen.options.rows} = ${screen.cellCount} cells`);
@@ -72,6 +74,7 @@ for (let tic = 0; tic < totalTics; tic++) {
     const started = performance.now();
     const changed = screen.ingest(frame.pixels, frame.width, frame.height);
     ingestMs += performance.now() - started;
+    screen.takeDirty();
     dirtyTotal += changed;
     sentPeak = Math.max(sentPeak, changed);
     timeline.push(changed);
