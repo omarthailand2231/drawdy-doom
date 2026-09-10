@@ -20,6 +20,7 @@ import { loadDoomModule } from "./doom/load";
 import { KvSaveStore } from "./doom/saves";
 import { InputRouter } from "./input";
 import { call, initProtocol, subscribe, unsubscribe } from "./protocol";
+import { QualityGovernor, type QualityLevel } from "./quality";
 import { TEST_IMAGE_PNG, layoutProbes } from "./render/diagnostics";
 import { ImageScreen, imageDisplaySupported } from "./render/image-screen";
 import { frameLuminance, verifyDisplay } from "./render/verify";
@@ -42,10 +43,6 @@ const ACTION_BUTTON_ID = "doom-action-button";
 const SCREEN_ASPECT = 640 / 400;
 /** Fraction of the viewport left as breathing room when fitting the screen. */
 const FIT_MARGIN = 0.055;
-/** A canvas update slower than this means we are not keeping up. */
-const SLOW_UPDATE_MS = 45;
-/** Consecutive slow updates before auto-quality steps the grid down. */
-const SLOW_STREAK_LIMIT = 24;
 /** Always leave this much room for the rest of the worker between frames. */
 const MIN_FRAME_DELAY_MS = 8;
 /** Lag past this is abandoned rather than chased. */
@@ -84,7 +81,7 @@ class DoomDriver {
     private renderInFlight = false;
 
     private updateMs = 0;
-    private slowStreak = 0;
+    private governor: QualityGovernor | null = null;
     private framesShown = 0;
     /** `engine.frames` at the last resample, so we never redraw the same frame. */
     private shownFrame = -1;
@@ -259,8 +256,28 @@ class DoomDriver {
 
     // ------------------------------------------------------------------ screen
 
-    private resolution(): { cols: number; rows: number } {
-        return RESOLUTIONS.find((r) => r.id === this.settings.resolution) ?? RESOLUTIONS[2];
+    private resolution(id: ResolutionId = this.quality().resolution): { cols: number; rows: number } {
+        return RESOLUTIONS.find((r) => r.id === id) ?? RESOLUTIONS[2];
+    }
+
+    /** What the player asked for — the ceiling auto-quality may lower from. */
+    private ceiling(): QualityLevel {
+        return {
+            resolution: this.settings.resolution,
+            shades: this.settings.shades,
+            colorBits: this.settings.colorBits,
+        };
+    }
+
+    /** What is actually in use right now. */
+    private quality(): QualityLevel {
+        return this.governor?.current ?? this.ceiling();
+    }
+
+    /** A setting changed by hand: that is the new ceiling and the new level. */
+    private resetQuality(): void {
+        this.governor ??= new QualityGovernor(this.ceiling(), RESOLUTIONS);
+        this.governor.reset(this.ceiling());
     }
 
     private async viewportRect(): Promise<Rect | null> {
@@ -335,13 +352,14 @@ class DoomDriver {
             if (this.settings.displayMode === "image") {
                 this.log("this browser has no OffscreenCanvas in workers — using the shape grid");
             }
-            const { cols, rows } = this.resolution();
+            const level = this.quality();
+            const { cols, rows } = this.resolution(level.resolution);
             this.screen = new CanvasScreen(rect, this.mintId, {
                 cols,
                 rows,
-                colorBits: this.settings.colorBits,
+                colorBits: level.colorBits,
                 palette: this.settings.palette,
-                shades: this.settings.shades,
+                shades: level.shades,
                 samples: this.settings.samples,
                 style: this.settings.style,
             });
@@ -415,7 +433,7 @@ class DoomDriver {
             this.fpsWindowStart = now();
             this.nextFrameAt = now();
             this.shownFrame = -1;
-            this.slowStreak = 0;
+            this.resetQuality();
             this.setStatus("running");
             await this.flyToScreen();
             await this.syncPointerSubscriptions();
@@ -548,7 +566,7 @@ class DoomDriver {
         } finally {
             this.renderInFlight = false;
         }
-        this.autoQuality(elapsed);
+        this.applyQuality(elapsed);
     }
 
     /** @returns false when the frame did not land and the caller should bail. */
@@ -607,17 +625,26 @@ class DoomDriver {
         }
     }
 
-    /** Step the grid down when the board plainly cannot draw it fast enough. */
-    private autoQuality(elapsed: number): void {
-        if (!this.settings.autoQuality || !this.screen) return;
-        this.slowStreak = elapsed > SLOW_UPDATE_MS ? this.slowStreak + 1 : 0;
-        if (this.slowStreak < SLOW_STREAK_LIMIT) return;
-        this.slowStreak = 0;
-        const index = RESOLUTIONS.findIndex((r) => r.id === this.settings.resolution);
-        if (index <= 0) return;
-        const next = RESOLUTIONS[index - 1]!;
-        this.log(`drawing is taking ${elapsed.toFixed(0)} ms — dropping to ${next.label}`);
-        void this.setResolution(next.id);
+    /**
+     * Let the governor trade quality for frame rate, cheapest axis first.
+     *
+     * A colour-depth change only needs the live screen reconfigured; a
+     * resolution change means a different number of cells, so the whole
+     * preview batch has to be rebuilt.
+     */
+    private applyQuality(elapsed: number): void {
+        if (!this.settings.autoQuality || !this.screen || !this.governor) return;
+        const before = this.governor.current.resolution;
+        const change = this.governor.observe(elapsed, this.settings.palette);
+        if (!change) return;
+        this.log(change);
+        const level = this.governor.current;
+        if (level.resolution !== before) {
+            void this.remount(this.screen.rect);
+            return;
+        }
+        this.screen.setOptions({ shades: level.shades, colorBits: level.colorBits });
+        this.screen.invalidate();
     }
 
     // ---------------------------------------------------------------- settings
@@ -625,6 +652,7 @@ class DoomDriver {
     private async setResolution(id: ResolutionId): Promise<void> {
         if (this.settings.resolution === id && this.screen) return;
         this.settings.resolution = id;
+        this.resetQuality();
         saveSettings(this.settings);
         if (!this.running) return;
         const rect = this.screen?.rect ?? this.imageScreen?.rect ?? (await this.resolveScreenRect());
@@ -649,6 +677,7 @@ class DoomDriver {
     private async setPalette(palette: PaletteMode): Promise<void> {
         if (this.settings.palette === palette) return;
         this.settings.palette = palette;
+        this.resetQuality();
         saveSettings(this.settings);
         this.log(`colour: ${PALETTES.find((p) => p.id === palette)?.label ?? palette}`);
         if (this.screen) {
@@ -841,7 +870,8 @@ class DoomDriver {
 
     private pushState(): void {
         if (!this.consoleOpen) return;
-        const { cols, rows } = this.resolution();
+        const level = this.quality();
+        const { cols, rows } = this.resolution(level.resolution);
         void call("command:webview:post-message", {
             webviewDomId: CONSOLE_ID,
             message: {
@@ -855,11 +885,12 @@ class DoomDriver {
                 grid: this.imageScreen ? `640 x 400 (${(this.imageScreen.lastBytes / 1024).toFixed(0)} KB ${(this.imageScreen.actualFormat ?? "").replace("image/", "")})` : `${cols} x ${rows}`,
                 displayMode: this.settings.displayMode,
                 palette: this.settings.palette,
-                shades: this.settings.shades,
                 encodeMs: this.imageScreen?.lastEncodeMs ?? 0,
                 budgetMs: this.updateMs,
                 keys: this.input?.heldCount ?? 0,
                 resolution: this.settings.resolution,
+                degraded: this.governor?.degraded ?? false,
+                shades: level.shades,
                 mouseLook: this.settings.mouseLook,
                 autoQuality: this.settings.autoQuality,
                 diag: { ...this.diag },
@@ -1021,6 +1052,7 @@ class DoomDriver {
                 } else if (message.key === "shades" && typeof message.value === "number") {
                     this.settings.shades = Math.max(2, Math.min(64, Math.round(message.value)));
                     saveSettings(this.settings);
+                    this.resetQuality();
                     if (this.screen) {
                         this.screen.setOptions({ shades: this.settings.shades });
                         this.screen.invalidate();
